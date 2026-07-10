@@ -52,3 +52,8 @@ test("OpenRouter keys stay encrypted, provider-bound, and pinned to OpenRouter",
   assert.match(page, /never written to projects, exports, or browser storage/);
   assert.doesNotMatch(page, /sk-or-v1-[A-Za-z0-9]/);
 });
+
+test("tag builds cannot publish before the release workflow validates every platform", async () => {
+  const packager = await readFile(new URL("../scripts/package-desktop.mjs", import.meta.url), "utf8");
+  assert.match(packager, /publish:\s*["']never["']/);
+});

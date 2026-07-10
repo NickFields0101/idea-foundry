@@ -82,6 +82,7 @@ try {
   await build({
     projectDir: projectDirectory,
     targets,
+    publish: "never",
     config: { directories: { output: temporaryDirectory } },
   });
 
