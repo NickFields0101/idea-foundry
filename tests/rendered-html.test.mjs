@@ -51,7 +51,7 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);
   assert.match(layout, /images:\s*\["\/og\.png"\]/);
-  assert.match(scoring, /v3-powershell-parity\/1\.0\.1/);
+  assert.match(scoring, /v3-powershell-parity\/1\.0\.2/);
   assert.match(scoring, /numericAndGateEligible/);
   assert.match(scoring, /RUBRIC_MANIFEST_SHA256/);
   assert.doesNotMatch(page, /BEGIN (?:RSA )?PRIVATE KEY|wallet seed|secret phrase/i);

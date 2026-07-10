@@ -32,7 +32,11 @@ import {
   type Stage,
 } from "./lib/scoring";
 import { searchLlmModels } from "./lib/model-search";
+import { applyEvaluationProposals, applyEvidenceProposals, sourceContentSha256 } from "./lib/ai-assistance";
 import type {
+  DraftEvaluationResult,
+  EvidenceProposal,
+  ExtractEvidenceResult,
   ListModelsInput,
   LlmConfig,
   LlmConnectionOptions,
@@ -76,6 +80,37 @@ interface ProjectDetails {
   title: string;
   domain: string;
   selectedIdeaId: string;
+}
+
+interface EvaluationDraftState {
+  result: DraftEvaluationResult;
+  contextFingerprint: string;
+  gateFingerprints: Record<GateAssessment["id"], string>;
+  createdAt: string;
+}
+
+interface EvidenceAnalysisState {
+  result: ExtractEvidenceResult;
+  sourceFingerprint: string;
+  createdAt: string;
+}
+
+interface AiUndoState {
+  label: string;
+  review: ReviewInput;
+  appliedInputFingerprint: string;
+}
+
+interface EvidenceSourceDraft {
+  label: string;
+  text: string;
+  evidenceDate: string;
+  expiryDate: string;
+  reviewer: string;
+  relationshipOrConflict: string;
+  reviewerVerified: boolean;
+  verificationFingerprint: string;
+  updateClaimGrades: boolean;
 }
 
 interface AppState {
@@ -127,7 +162,7 @@ const LLM_PROVIDERS: Record<LlmProvider, {
   openaiCompatible: {
     label: "OpenAI-compatible",
     defaultUrl: "https://api.openai.com/v1",
-    boundary: "May be local or cloud. Prompts leave this computer whenever the endpoint is remote.",
+    boundary: "Loopback HTTP is allowed for a model on this computer; every remote endpoint must use HTTPS.",
     location: "Local or cloud",
     remote: true,
     keyRequired: false,
@@ -184,6 +219,110 @@ function oneYearFromToday() {
   const date = new Date();
   date.setUTCFullYear(date.getUTCFullYear() + 1);
   return date.toISOString().slice(0, 10);
+}
+
+function emptyEvidenceSourceDraft(): EvidenceSourceDraft {
+  return {
+    label: "",
+    text: "",
+    evidenceDate: "",
+    expiryDate: "",
+    reviewer: "",
+    relationshipOrConflict: "",
+    reviewerVerified: false,
+    verificationFingerprint: "",
+    updateClaimGrades: false,
+  };
+}
+
+function emptyManualEvidenceDraft() {
+  return {
+    title: "",
+    claimId: "1A",
+    evidenceType: "CustomerObservation" as EvidenceType,
+    grade: "E2" as EvidenceGrade,
+    direction: "supports" as "supports" | "contradicts",
+    evidenceDate: today(),
+    expiryDate: oneYearFromToday(),
+    reviewerVerified: false,
+    reviewer: "",
+    relationshipOrConflict: "",
+  };
+}
+
+function nextEvidenceSuffix(artifacts: EvidenceArtifact[]) {
+  const used = new Set(artifacts.flatMap((artifact) => [
+    artifact.artifactId.toUpperCase(),
+    artifact.evidenceClaimId.toUpperCase(),
+    artifact.sourceFamilyId.toUpperCase(),
+    artifact.observationId.toUpperCase(),
+  ]));
+  for (let index = 1; ; index += 1) {
+    const suffix = String(index).padStart(3, "0");
+    if ([`A-${suffix}`, `EC-${suffix}`, `SF-${suffix}`, `OBS-${suffix}`].every((id) => !used.has(id))) return suffix;
+  }
+}
+
+function secureFingerprint(value: string) {
+  return sourceContentSha256(value);
+}
+
+function gateStateFingerprint(gate: GateAssessment) {
+  return secureFingerprint(JSON.stringify(gate));
+}
+
+function modelSafeSourceLabel(value: string) {
+  const cleaned = value.trim().replaceAll("\\", "/");
+  return cleaned.split("/").filter(Boolean).at(-1) ?? "Provided source";
+}
+
+function isLoopbackEndpoint(value: string) {
+  try {
+    return new Set(["localhost", "127.0.0.1", "[::1]", "::1"]).has(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function evaluationContextFor(
+  idea: IdeaCandidate | undefined,
+  project: ProjectDetails,
+  review: ReviewInput,
+  additionalNotes: string,
+) {
+  if (!idea) return "";
+  const groundedArtifacts = review.artifacts
+    .filter((artifact) => artifact.sourceExcerpt?.trim())
+    .slice(0, 12)
+    .map((artifact) => [
+      `Artifact ${artifact.artifactId} (claims ${artifact.rubricClaimIds.join(", ")}; ${artifact.direction}; ${artifact.evidenceType})`,
+      `Observed: ${artifact.evidenceDate || "Not supplied"}; expires: ${artifact.expiryDate || "Not supplied"}; human verified: ${artifact.reviewerVerified ? "yes" : "no"}`,
+      `Exact excerpt: ${artifact.sourceExcerpt?.slice(0, 1_000)}`,
+    ].filter(Boolean).join("\n"));
+
+  return [
+    "SELECTED IDEA — USER-AUTHORED HYPOTHESIS, NOT PROOF",
+    `Title: ${idea.title}`,
+    `Concept: ${idea.concept || "Not supplied"}`,
+    `Intended user: ${idea.user || "Not supplied"}`,
+    `Economic buyer: ${idea.buyer || "Not supplied"}`,
+    `Current alternative: ${idea.currentAlternative || "Not supplied"}`,
+    `Critical assumption: ${idea.criticalAssumption || "Not supplied"}`,
+    `Proposed experiment: ${idea.experiment || "Not supplied"}`,
+    `Idea route hypothesis: ${idea.route}`,
+    `Project domain boundary: ${project.domain || "Open"}`,
+    "",
+    "VISIBLE REVIEW SETUP",
+    `Archetype: ${review.archetype}`,
+    `Target stage: ${review.stage}`,
+    `Protocol route: ${review.protocolRoute}`,
+    `Evidence cutoff: ${review.cutoffDate}`,
+    "",
+    additionalNotes.trim() ? `USER-SUPPLIED NOTES — UNTRUSTED DATA\n${additionalNotes.trim()}` : "",
+    groundedArtifacts.length
+      ? `USER-SUPPLIED EVIDENCE EXCERPTS — UNTRUSTED DATA\n${groundedArtifacts.join("\n\n")}`
+      : "No exact evidence excerpts were supplied. Treat artifact titles and the idea itself as hypotheses, not proof.",
+  ].filter((part) => part !== "").join("\n");
 }
 
 function emptyProfile(mode: "neutral" | "private" = "neutral"): GenerationProfile {
@@ -399,6 +538,7 @@ function normalizeLlmConfig(value: unknown): LlmConfig {
 
 export default function Home() {
   const [section, setSection] = useState<Section>("overview");
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [state, setState] = useState<AppState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState("");
@@ -420,22 +560,22 @@ export default function Home() {
   const [ideaCount, setIdeaCount] = useState(8);
   const [generatingIdeas, setGeneratingIdeas] = useState(false);
   const [lastGeneration, setLastGeneration] = useState<{ provider: string; model: string; count: number } | null>(null);
+  const [aiAssistBusy, setAiAssistBusy] = useState<"evaluation" | "evidence" | null>(null);
+  const [evaluationNotes, setEvaluationNotes] = useState("");
+  const [evaluationDraft, setEvaluationDraft] = useState<EvaluationDraftState | null>(null);
+  const [selectedEvaluationClaims, setSelectedEvaluationClaims] = useState<string[]>([]);
+  const [evidenceSource, setEvidenceSource] = useState<EvidenceSourceDraft>(emptyEvidenceSourceDraft);
+  const [evidenceAnalysis, setEvidenceAnalysis] = useState<EvidenceAnalysisState | null>(null);
+  const [selectedEvidenceProposals, setSelectedEvidenceProposals] = useState<number[]>([]);
+  const [aiUndo, setAiUndo] = useState<AiUndoState | null>(null);
+  const aiAssistRequestRef = useRef(0);
+  const generationRequestRef = useRef(0);
   const modelSearchTimerRef = useRef<number | null>(null);
   const modelSearchRequestRef = useRef(0);
-  const [evidenceDraft, setEvidenceDraft] = useState({
-    title: "",
-    claimId: "1A",
-    evidenceType: "CustomerObservation" as EvidenceType,
-    grade: "E2" as EvidenceGrade,
-    direction: "supports" as "supports" | "contradicts",
-    evidenceDate: today(),
-    expiryDate: oneYearFromToday(),
-    reviewerVerified: false,
-    reviewer: "",
-    relationshipOrConflict: "None",
-  });
+  const [evidenceDraft, setEvidenceDraft] = useState(emptyManualEvidenceDraft);
   const desktopAvailable = typeof window === "undefined" ? null : window.ideaFoundry?.desktop === true;
   const selectedLlmProvider = LLM_PROVIDERS[llmConfig.provider];
+  const llmUsesRemoteEndpoint = !isLoopbackEndpoint(llmConfig.baseUrl);
   const llmHasUsableApiKey = Boolean(llmApiKey.trim() || (llmConfig.hasApiKey && !clearLlmApiKey));
   const llmReady = Boolean(llmConfig.model.trim() && (!selectedLlmProvider.keyRequired || llmHasUsableApiKey));
 
@@ -514,8 +654,61 @@ export default function Home() {
   }, [section, state.started]);
 
   const score = useMemo(() => scoreReview(state.review), [state.review]);
+  const aiUndoAvailable = aiUndo !== null && aiUndo.appliedInputFingerprint === score.inputFingerprint;
   const profileErrors = useMemo(() => validateGenerationProfile(state.profile), [state.profile]);
   const selectedIdea = state.ideas.find((idea) => idea.id === state.project.selectedIdeaId);
+  const evaluationContext = useMemo(
+    () => evaluationContextFor(selectedIdea, state.project, state.review, evaluationNotes),
+    [evaluationNotes, selectedIdea, state.project, state.review],
+  );
+  const evaluationContextFingerprint = useMemo(
+    () => secureFingerprint(JSON.stringify([
+      selectedIdea?.id ?? "no-idea",
+      evaluationContext,
+      state.review.artifacts,
+    ])),
+    [evaluationContext, selectedIdea?.id, state.review.artifacts],
+  );
+  const evidenceSourceFingerprint = useMemo(
+    () => secureFingerprint(JSON.stringify([
+      evidenceSource.label.trim(),
+      evidenceSource.text,
+      score.inputFingerprint,
+      state.project.selectedIdeaId,
+    ])),
+    [evidenceSource.label, evidenceSource.text, score.inputFingerprint, state.project.selectedIdeaId],
+  );
+  const currentEvidenceVerificationFingerprint = useMemo(() => secureFingerprint(JSON.stringify([
+    evidenceSourceFingerprint,
+    [...selectedEvidenceProposals].sort((left, right) => left - right),
+    selectedEvidenceProposals
+      .map((index) => evidenceAnalysis?.result.evidence[index])
+      .filter(Boolean),
+    evidenceSource.evidenceDate,
+    evidenceSource.expiryDate,
+    evidenceSource.reviewer.trim(),
+    evidenceSource.relationshipOrConflict.trim(),
+  ])), [
+    evidenceAnalysis,
+    evidenceSource.evidenceDate,
+    evidenceSource.expiryDate,
+    evidenceSource.relationshipOrConflict,
+    evidenceSource.reviewer,
+    evidenceSourceFingerprint,
+    selectedEvidenceProposals,
+  ]);
+  const evidenceHumanVerificationCurrent = evidenceSource.reviewerVerified
+    && evidenceSource.verificationFingerprint === currentEvidenceVerificationFingerprint;
+  const selectedEvidenceNeedsVerification = useMemo(() => {
+    if (!evidenceAnalysis) return false;
+    return selectedEvidenceProposals.some((index) => {
+      const proposal = evidenceAnalysis.result.evidence[index];
+      return proposal && Math.min(
+        EVIDENCE_RANK[proposal.suggestedGrade],
+        EVIDENCE_TYPE_MAX_RANK[proposal.suggestedType],
+      ) >= EVIDENCE_RANK.E2;
+    });
+  }, [evidenceAnalysis, selectedEvidenceProposals]);
   const categories = useMemo(
     () => [...new Map(RUBRIC.map((row) => [row.categoryId, row.category])).entries()],
     [],
@@ -551,6 +744,25 @@ export default function Home() {
 
   function updateReview(patch: Partial<ReviewInput>) {
     setState((current) => ({ ...current, review: { ...current.review, ...patch } }));
+  }
+
+  function resetAiWorkspace() {
+    aiAssistRequestRef.current += 1;
+    generationRequestRef.current += 1;
+    setAiAssistBusy(null);
+    setEvaluationNotes("");
+    setEvaluationDraft(null);
+    setSelectedEvaluationClaims([]);
+    setEvidenceSource(emptyEvidenceSourceDraft());
+    setEvidenceAnalysis(null);
+    setSelectedEvidenceProposals([]);
+    setEvidenceDraft(emptyManualEvidenceDraft());
+    setAiUndo(null);
+    setGeneratingIdeas(false);
+    setLastGeneration(null);
+    setLlmApiKey("");
+    setClearLlmApiKey(false);
+    setMobileMoreOpen(false);
   }
 
   function updateClaim(claimId: string, patch: Partial<ReviewInput["claims"][number]>) {
@@ -769,9 +981,11 @@ export default function Home() {
       return;
     }
 
+    const requestId = ++generationRequestRef.current;
     setGeneratingIdeas(true);
     try {
       const saved = normalizeLlmConfig(await bridge.llm.saveConfig(currentLlmInput()));
+      if (requestId !== generationRequestRef.current) return;
       setLlmConfig(saved);
       setLlmApiKey("");
       setClearLlmApiKey(false);
@@ -783,6 +997,7 @@ export default function Home() {
         baseUrl: saved.baseUrl,
         model: saved.model,
       });
+      if (requestId !== generationRequestRef.current) return;
       const generatedAt = new Date().toISOString();
       const candidates = result.ideas
         .map((idea: NormalizedGeneratedIdea) => validateGeneratedIdea(idea, state.profile.mode === "private"))
@@ -797,12 +1012,261 @@ export default function Home() {
       setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
       setToast(`${candidates.length} AI hypotheses added`);
     } catch (error) {
+      if (requestId !== generationRequestRef.current) return;
       setLlmMessage(error instanceof Error ? error.message : "Idea generation failed.");
       setLlmMessageTone("error");
       setSection("model");
     } finally {
-      setGeneratingIdeas(false);
+      if (requestId === generationRequestRef.current) setGeneratingIdeas(false);
     }
+  }
+
+  async function saveAiConnectionOrOpenSettings() {
+    const bridge = window.ideaFoundry;
+    if (!bridge?.desktop) {
+      setSection("model");
+      return null;
+    }
+    if (!llmConfig.model.trim() || (selectedLlmProvider.keyRequired && !llmHasUsableApiKey)) {
+      setLlmMessage("Connect a model before using AI assistance.");
+      setLlmMessageTone("error");
+      setSection("model");
+      return null;
+    }
+    const saved = normalizeLlmConfig(await bridge.llm.saveConfig(currentLlmInput()));
+    setLlmConfig(saved);
+    setLlmApiKey("");
+    setClearLlmApiKey(false);
+    return { bridge, saved };
+  }
+
+  async function draftEvaluationWithAi() {
+    if (!selectedIdea) {
+      setToast("Choose an idea before drafting an evaluation");
+      setSection("ideas");
+      return;
+    }
+    const claimIds = state.review.claims.filter((claim) => claim.merit === null).map((claim) => claim.claimId);
+    if (claimIds.length === 0) {
+      setToast("Every claim already has a merit rating");
+      return;
+    }
+    const requestId = ++aiAssistRequestRef.current;
+    setAiAssistBusy("evaluation");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection) return;
+      const result = await connection.bridge.llm.draftEvaluation({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: evaluationContext,
+        claimIds,
+      });
+      if (requestId !== aiAssistRequestRef.current) return;
+      setEvaluationDraft({
+        result,
+        contextFingerprint: evaluationContextFingerprint,
+        gateFingerprints: Object.fromEntries(
+          state.review.gates.map((gate) => [gate.id, gateStateFingerprint(gate)]),
+        ) as Record<GateAssessment["id"], string>,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedEvaluationClaims([]);
+      setToast(`${result.claims.length} claim drafts ready for review`);
+    } catch (error) {
+      if (requestId !== aiAssistRequestRef.current) return;
+      const message = error instanceof Error ? error.message : "The model could not draft this evaluation.";
+      setLlmMessage(message);
+      setLlmMessageTone("error");
+      setToast("Evaluation draft failed — no review data changed");
+    } finally {
+      if (requestId === aiAssistRequestRef.current) setAiAssistBusy(null);
+    }
+  }
+
+  async function organizeEvidenceWithAi() {
+    if (!evidenceSource.label.trim()) {
+      setToast("Name the source before organizing it");
+      return;
+    }
+    if (evidenceSource.text.trim().length < 20) {
+      setToast("Paste the actual source text — a URL or title is not evidence");
+      return;
+    }
+    const requestId = ++aiAssistRequestRef.current;
+    setAiAssistBusy("evidence");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection) return;
+      const result = await connection.bridge.llm.extractEvidence({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        sourceText: evidenceSource.text,
+        sourceLabel: modelSafeSourceLabel(evidenceSource.label),
+      });
+      if (requestId !== aiAssistRequestRef.current) return;
+      setEvidenceAnalysis({
+        result,
+        sourceFingerprint: evidenceSourceFingerprint,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedEvidenceProposals([]);
+      setToast(`${result.evidence.length} evidence draft${result.evidence.length === 1 ? "" : "s"} ready for review`);
+    } catch (error) {
+      if (requestId !== aiAssistRequestRef.current) return;
+      const message = error instanceof Error ? error.message : "The model could not organize this evidence.";
+      setLlmMessage(message);
+      setLlmMessageTone("error");
+      setToast("Evidence analysis failed — no ledger data changed");
+    } finally {
+      if (requestId === aiAssistRequestRef.current) setAiAssistBusy(null);
+    }
+  }
+
+  function updateEvaluationProposal(claimId: string, patch: Partial<DraftEvaluationResult["claims"][number]>) {
+    setEvaluationDraft((current) => current ? {
+      ...current,
+      result: {
+        ...current.result,
+        claims: current.result.claims.map((proposal) => proposal.claimId === claimId ? { ...proposal, ...patch } : proposal),
+      },
+    } : current);
+  }
+
+  function updateEvidenceProposal(index: number, patch: Partial<EvidenceProposal>) {
+    setEvidenceAnalysis((current) => current ? {
+      ...current,
+      result: {
+        ...current.result,
+        evidence: current.result.evidence.map((proposal, proposalIndex) => proposalIndex === index ? { ...proposal, ...patch } : proposal),
+      },
+    } : current);
+  }
+
+  function applySelectedEvaluation() {
+    if (!evaluationDraft || selectedEvaluationClaims.length === 0) {
+      setToast("Select at least one claim recommendation first");
+      return;
+    }
+    if (evaluationDraft.contextFingerprint !== evaluationContextFingerprint) {
+      setToast("This draft is stale. Generate a new evaluation draft first.");
+      return;
+    }
+    try {
+      const result = applyEvaluationProposals({
+        review: state.review,
+        draft: evaluationDraft.result,
+        selectedClaimIds: selectedEvaluationClaims,
+        expectedContextFingerprint: evaluationDraft.contextFingerprint,
+        currentContextFingerprint: evaluationContextFingerprint,
+      });
+      setState((current) => ({ ...current, review: result.review }));
+      setAiUndo({
+        label: "AI claim recommendations",
+        review: result.previousReview,
+        appliedInputFingerprint: scoreReview(result.review).inputFingerprint,
+      });
+      setSelectedEvaluationClaims([]);
+      setToast(`${result.appliedClaimIds.length} merit recommendation${result.appliedClaimIds.length === 1 ? "" : "s"} applied; evidence grades unchanged`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The selected recommendations could not be applied.");
+    }
+  }
+
+  function applySelectedEvidence() {
+    if (!evidenceAnalysis || selectedEvidenceProposals.length === 0) {
+      setToast("Select at least one grounded evidence draft first");
+      return;
+    }
+    try {
+      const linkSupportingProposalIndexes = evidenceSource.updateClaimGrades
+        ? selectedEvidenceProposals.filter((index) => evidenceAnalysis.result.evidence[index]?.direction === "supports")
+        : [];
+      const result = applyEvidenceProposals({
+        review: state.review,
+        draft: evidenceAnalysis.result,
+        selectedProposalIndexes: selectedEvidenceProposals,
+        linkSupportingProposalIndexes,
+        sourceText: evidenceSource.text,
+        sourceLabel: evidenceSource.label,
+        humanApproval: {
+          reviewerVerified: evidenceHumanVerificationCurrent,
+          reviewer: evidenceSource.reviewer,
+          relationshipOrConflict: evidenceSource.relationshipOrConflict,
+          evidenceDate: evidenceSource.evidenceDate,
+          expiryDate: evidenceSource.expiryDate,
+        },
+        expectedContextFingerprint: evidenceAnalysis.sourceFingerprint,
+        currentContextFingerprint: evidenceSourceFingerprint,
+      });
+      setState((current) => ({ ...current, review: result.review }));
+      setAiUndo({
+        label: `${result.artifacts.length} AI-organized evidence record${result.artifacts.length === 1 ? "" : "s"}`,
+        review: result.previousReview,
+        appliedInputFingerprint: scoreReview(result.review).inputFingerprint,
+      });
+      setSelectedEvidenceProposals([]);
+      setEvidenceAnalysis(null);
+      setEvidenceSource((current) => ({
+        ...current,
+        label: "",
+        text: "",
+        evidenceDate: "",
+        expiryDate: "",
+        reviewerVerified: false,
+        verificationFingerprint: "",
+        updateClaimGrades: false,
+      }));
+      const linked = result.linkedClaimIds.length ? `; ${result.linkedClaimIds.length} supporting claim${result.linkedClaimIds.length === 1 ? "" : "s"} updated` : "";
+      setToast(`${result.artifacts.length} grounded record${result.artifacts.length === 1 ? "" : "s"} added${linked}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The selected evidence could not be added.");
+    }
+  }
+
+  function applyGateProposal(gateId: GateAssessment["id"]) {
+    const proposal = evaluationDraft?.result.gates.find((item) => item.gateId === gateId);
+    if (!evaluationDraft || !proposal) return;
+    if (evaluationDraft.contextFingerprint !== evaluationContextFingerprint) {
+      setToast("This draft is stale. Generate a new evaluation draft first.");
+      return;
+    }
+    const currentGate = state.review.gates.find((gate) => gate.id === gateId);
+    if (!currentGate || evaluationDraft.gateFingerprints[gateId] !== gateStateFingerprint(currentGate)) {
+      setToast(`${gateId} changed after this draft. Generate a fresh recommendation before applying it.`);
+      return;
+    }
+    if (!window.confirm(
+      `Apply the AI draft status “${proposal.suggestedStatus}” to ${gateId}? Gate decisions are non-compensable and remain your responsibility.`,
+    )) return;
+    const nextReview: ReviewInput = {
+      ...state.review,
+      gates: state.review.gates.map((gate) => gate.id === gateId ? {
+        ...gate,
+        status: proposal.suggestedStatus,
+        rationale: `[AI draft applied by reviewer · ${evaluationDraft.result.provider}/${evaluationDraft.result.model}] ${proposal.reasoning}${proposal.uncertainty ? ` Uncertainty: ${proposal.uncertainty}` : ""}`,
+      } : gate),
+    };
+    setAiUndo({
+      label: `${gateId} gate recommendation`,
+      review: structuredClone(state.review),
+      appliedInputFingerprint: scoreReview(nextReview).inputFingerprint,
+    });
+    setState((current) => ({ ...current, review: nextReview }));
+    setToast(`${gateId} recommendation applied; other gates were unchanged`);
+  }
+
+  function undoLastAiApproval() {
+    if (!aiUndo || !aiUndoAvailable) {
+      setAiUndo(null);
+      setToast("Undo expired because the review changed afterward");
+      return;
+    }
+    setState((current) => ({ ...current, review: structuredClone(aiUndo.review) }));
+    setToast(`Undid ${aiUndo.label}`);
+    setAiUndo(null);
   }
 
   function addEvidence() {
@@ -814,33 +1278,41 @@ export default function Home() {
       setToast(`${evidenceDraft.evidenceType} cannot support ${evidenceDraft.grade}`);
       return;
     }
-    const suffix = String(state.review.artifacts.length + 1).padStart(3, "0");
-    const artifact: EvidenceArtifact = {
-      artifactId: `A-${suffix}`,
-      evidenceClaimId: `EC-${suffix}`,
-      title: evidenceDraft.title.trim(),
-      rubricClaimIds: [evidenceDraft.claimId],
-      sourceFamilyId: `SF-${suffix}`,
-      observationId: `OBS-${suffix}`,
-      duplicateOf: "",
-      reviewerVerified: evidenceDraft.reviewerVerified,
-      reviewer: evidenceDraft.reviewer,
-      relationshipOrConflict: evidenceDraft.relationshipOrConflict,
-      evidenceType: evidenceDraft.evidenceType,
-      evidenceDate: evidenceDraft.evidenceDate,
-      expiryDate: evidenceDraft.expiryDate,
-      grade: evidenceDraft.grade,
-      direction: evidenceDraft.direction,
-    };
-    updateReview({ artifacts: [...state.review.artifacts, artifact] });
-    if (artifact.direction === "supports") {
-      const claim = state.review.claims.find((item) => item.claimId === artifact.rubricClaimIds[0]);
-      updateClaim(artifact.rubricClaimIds[0], {
-        grade: artifact.grade,
-        evidenceClaimIds: [...new Set([...(claim?.evidenceClaimIds ?? []), artifact.evidenceClaimId])],
-        evidenceArtifactIds: [...new Set([...(claim?.evidenceArtifactIds ?? []), artifact.artifactId])],
-      });
-    }
+    setState((current) => {
+      const suffix = nextEvidenceSuffix(current.review.artifacts);
+      const artifact: EvidenceArtifact = {
+        artifactId: `A-${suffix}`,
+        evidenceClaimId: `EC-${suffix}`,
+        title: evidenceDraft.title.trim(),
+        rubricClaimIds: [evidenceDraft.claimId],
+        sourceFamilyId: `SF-${suffix}`,
+        observationId: `OBS-${suffix}`,
+        duplicateOf: "",
+        reviewerVerified: evidenceDraft.reviewerVerified,
+        reviewer: evidenceDraft.reviewer,
+        relationshipOrConflict: evidenceDraft.relationshipOrConflict,
+        evidenceType: evidenceDraft.evidenceType,
+        evidenceDate: evidenceDraft.evidenceDate,
+        expiryDate: evidenceDraft.expiryDate,
+        grade: evidenceDraft.grade,
+        direction: evidenceDraft.direction,
+      };
+      return {
+        ...current,
+        review: {
+          ...current.review,
+          artifacts: [...current.review.artifacts, artifact],
+          claims: artifact.direction === "supports"
+            ? current.review.claims.map((claim) => claim.claimId === artifact.rubricClaimIds[0] ? {
+              ...claim,
+              grade: EVIDENCE_RANK[artifact.grade] > EVIDENCE_RANK[claim.grade] ? artifact.grade : claim.grade,
+              evidenceClaimIds: [...new Set([...claim.evidenceClaimIds, artifact.evidenceClaimId])],
+              evidenceArtifactIds: [...new Set([...claim.evidenceArtifactIds, artifact.artifactId])],
+            } : claim)
+            : current.review.claims,
+        },
+      };
+    });
     setEvidenceDraft((current) => ({ ...current, title: "" }));
     setToast("Evidence added; deterministic validation reran");
   }
@@ -913,6 +1385,7 @@ export default function Home() {
     try {
       const parsed = JSON.parse(importText) as Partial<AppState> & { review?: ReviewInput; profile?: GenerationProfile };
       if (!parsed.review || !Array.isArray(parsed.review.claims)) throw new Error("Missing review");
+      resetAiWorkspace();
       setState((current) => ({
         ...current,
         started: true,
@@ -1033,6 +1506,9 @@ export default function Home() {
           <button className="text-button danger" onClick={() => {
             if (window.confirm("Clear this locally saved workspace?")) {
               localStorage.removeItem(STORAGE_KEY);
+              resetAiWorkspace();
+              setImportText("");
+              setIncludeProfile(false);
               setState(defaultState());
               setSection("overview");
             }
@@ -1181,8 +1657,8 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
-                  <div className={`endpoint-boundary ${selectedLlmProvider.remote ? "remote-warning" : "local"}`}>
-                    <strong>{selectedLlmProvider.remote ? "Cloud" : "Local"}</strong>
+                  <div className={`endpoint-boundary ${llmUsesRemoteEndpoint ? "remote-warning" : "local"}`}>
+                    <strong>{llmUsesRemoteEndpoint ? "Cloud" : "Local"}</strong>
                     <span>{selectedLlmProvider.boundary}</span>
                   </div>
                   <div className="model-simple-fields">
@@ -1353,6 +1829,81 @@ export default function Home() {
         {section === "review" && (
           <div className="page-section">
             <PageHeading eyebrow="Evaluate" title="Answer what must be true." description="Work through the claims one category at a time. Unanswered items stay unassessed, and the calculator never fills gaps optimistically." />
+            <section className="ai-assist-card" aria-labelledby="evaluation-ai-title">
+              <div className="ai-assist-head">
+                <div className="ai-assist-symbol" aria-hidden="true">AI</div>
+                <div>
+                  <p className="eyebrow">Optional assistant</p>
+                  <h2 id="evaluation-ai-title">Draft an evaluation with AI</h2>
+                  <p>AI can recommend merit ratings and explain uncertainty. Nothing changes until you select and apply a draft. Evidence grades and the deterministic calculator stay under local rules.</p>
+                </div>
+                <span className="provisional-pill">Draft only</span>
+              </div>
+
+              {desktopAvailable !== true ? (
+                <div className="ai-assist-empty"><span>Desktop feature</span><p>AI assistance uses the model connected in the local desktop app. Manual evaluation remains fully available here.</p><button className="button secondary" onClick={() => setSection("model")}>Model options</button></div>
+              ) : !selectedIdea ? (
+                <div className="ai-assist-empty"><span>Idea required</span><p>Choose the hypothesis the model should assess before creating a draft.</p><button className="button secondary" onClick={() => setSection("ideas")}>Choose an idea</button></div>
+              ) : !llmReady ? (
+                <div className="ai-assist-empty"><span>Model required</span><p>Connect Ollama, LM Studio, OpenRouter, or another compatible model first.</p><button className="button secondary" onClick={() => setSection("model")}>Connect a model</button></div>
+              ) : (
+                <div className="ai-assist-controls">
+                  <div className="ai-model-line"><span className={llmUsesRemoteEndpoint ? "cloud" : "local"}>{llmUsesRemoteEndpoint ? "Cloud" : "Local"}</span><strong>{llmConfig.model}</strong><small>{llmUsesRemoteEndpoint ? "The selected idea, these notes, and exact evidence excerpts are sent to the provider when you click Draft." : "The selected context stays on this computer when the endpoint is local."}</small></div>
+                  <label className="ai-notes-field"><span>Additional facts or notes <small>optional · up to 8,000 characters</small></span><textarea rows={3} maxLength={8_000} value={evaluationNotes} placeholder="Paste facts the model may use. Do not paste private profile data unless you intend to send it." onChange={(event) => setEvaluationNotes(event.target.value)} /></label>
+                  <div className="ai-action-row"><span>{state.review.claims.filter((claim) => claim.merit === null).length} unanswered claims will be requested. Existing answers will not be overwritten.</span><button className="button primary" disabled={aiAssistBusy !== null} onClick={() => void draftEvaluationWithAi()}>{aiAssistBusy === "evaluation" ? "Drafting…" : llmUsesRemoteEndpoint ? "Send & draft unanswered" : "Draft unanswered claims"}</button></div>
+                </div>
+              )}
+
+              {aiUndoAvailable && aiUndo && <div className="ai-undo-bar" role="status"><span>Last AI-assisted approval: {aiUndo.label}</span><button className="text-button" onClick={undoLastAiApproval}>Undo</button></div>}
+
+              {evaluationDraft && (
+                <div className="ai-draft-panel">
+                  <div className="ai-draft-summary">
+                    <div><strong>Provisional draft</strong><span>{evaluationDraft.result.provider} · {evaluationDraft.result.model} · {new Date(evaluationDraft.createdAt).toLocaleString()}</span></div>
+                    <span>{evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit !== null).length} rated · {evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit === null).length} left unknown</span>
+                  </div>
+                  {evaluationDraft.contextFingerprint !== evaluationContextFingerprint && <div className="ai-stale-warning" role="status"><strong>Draft out of date.</strong><span>The idea, review setup, notes, or supplied excerpts changed. Generate a fresh draft before applying anything.</span></div>}
+                  <details className="ai-review-queue" open>
+                    <summary>Review claim recommendations</summary>
+                    <div className="ai-queue-toolbar"><span>No recommendations are selected automatically.</span><div><button className="text-button" disabled={evaluationDraft.contextFingerprint !== evaluationContextFingerprint} onClick={() => setSelectedEvaluationClaims(evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit !== null && state.review.claims.find((claim) => claim.claimId === proposal.claimId)?.merit === null).map((proposal) => proposal.claimId))}>Select rated drafts</button><button className="text-button" onClick={() => setSelectedEvaluationClaims([])}>Clear</button></div></div>
+                    <div className="ai-proposal-list">
+                      {evaluationDraft.result.claims.map((proposal) => {
+                        const rubricRow = RUBRIC.find((row) => row.claimId === proposal.claimId);
+                        const currentClaim = state.review.claims.find((claim) => claim.claimId === proposal.claimId);
+                        const selectable = proposal.suggestedMerit !== null && currentClaim?.merit === null && evaluationDraft.contextFingerprint === evaluationContextFingerprint;
+                        return (
+                          <article className={`ai-proposal ${selectedEvaluationClaims.includes(proposal.claimId) ? "selected" : ""}`} key={proposal.claimId}>
+                            <label className="ai-proposal-check"><input type="checkbox" checked={selectedEvaluationClaims.includes(proposal.claimId)} disabled={!selectable} onChange={(event) => setSelectedEvaluationClaims((current) => event.target.checked ? [...new Set([...current, proposal.claimId])] : current.filter((claimId) => claimId !== proposal.claimId))} /><span className="sr-only">Select {proposal.claimId}</span></label>
+                            <div className="ai-proposal-copy"><div><code>{proposal.claimId}</code><strong>{rubricRow?.atomicClaim ?? "Canonical claim"}</strong></div><p>{proposal.reasoning}</p>{proposal.uncertainty && <small>Uncertainty: {proposal.uncertainty}</small>}</div>
+                            <div className="ai-proposal-rating"><label><span>Draft merit</span><input type="number" min="0" max="5" step="0.5" placeholder="Unknown" value={proposal.suggestedMerit ?? ""} disabled={currentClaim?.merit !== null} onChange={(event) => updateEvaluationProposal(proposal.claimId, { suggestedMerit: event.target.value === "" ? null : Math.max(0, Math.min(5, Math.round(Number(event.target.value) * 2) / 2)) })} /></label><span className={`confidence confidence-${proposal.confidence}`}>{proposal.confidence}</span>{currentClaim?.merit !== null && <small>Already answered: {currentClaim?.merit}</small>}</div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    <div className="ai-apply-row"><span>Only merit and an audit note will change. Grades, evidence links, weights, and gates remain untouched.</span><button className="button primary" disabled={selectedEvaluationClaims.length === 0 || evaluationDraft.contextFingerprint !== evaluationContextFingerprint} onClick={applySelectedEvaluation}>Apply {selectedEvaluationClaims.length || "selected"}</button></div>
+                  </details>
+
+                  <details className="ai-review-queue gate-drafts">
+                    <summary>Review gate recommendations one at a time</summary>
+                    <p className="ai-queue-note">Gate decisions are non-compensable. There is no bulk apply; each recommendation needs a separate human action.</p>
+                    <div className="ai-gate-list">
+                      {evaluationDraft.result.gates.map((proposal) => {
+                        const currentGate = state.review.gates.find((gate) => gate.id === proposal.gateId);
+                        const gateChanged = !currentGate || evaluationDraft.gateFingerprints[proposal.gateId] !== gateStateFingerprint(currentGate);
+                        return (
+                          <article key={proposal.gateId}>
+                            <div><code>{proposal.gateId}</code><strong>{gateLabels[proposal.gateId]}</strong><span className={`confidence confidence-${proposal.confidence}`}>{proposal.confidence}</span></div>
+                            <p>{proposal.reasoning}</p>
+                            {proposal.uncertainty && <small>Uncertainty: {proposal.uncertainty}</small>}
+                            <div><span>Current: {currentGate?.status.replace("_", " ")}</span><strong>{gateChanged ? "Changed since draft" : `Draft: ${proposal.suggestedStatus.replace("_", " ")}`}</strong><button className="button small secondary" aria-label={`Apply ${proposal.gateId} gate recommendation`} disabled={gateChanged || evaluationDraft.contextFingerprint !== evaluationContextFingerprint} onClick={() => applyGateProposal(proposal.gateId)}>Apply this gate only</button></div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </section>
             <div className="review-config">
               <label><span>Dominant archetype</span><select value={state.review.archetype} onChange={(event) => updateReview({ archetype: event.target.value as Archetype })}>{ARCHETYPES.map((item) => <option key={item} value={item}>{archetypeLabels[item]}</option>)}</select></label>
               <label><span>Target stage</span><select value={state.review.stage} onChange={(event) => updateReview({ stage: event.target.value as Stage })}>{STAGES.map((item) => <option key={item} value={item}>{stageLabels[item]}</option>)}</select></label>
@@ -1414,6 +1965,73 @@ export default function Home() {
         {section === "evidence" && (
           <div className="page-section">
             <PageHeading eyebrow="Evidence" title="Add proof for your answers." description="Link each piece of evidence to a claim. Idea Foundry checks quality limits, dates, verification, duplicates, and counterevidence." />
+            <section className="ai-assist-card evidence-ai-card" aria-labelledby="evidence-ai-title">
+              <div className="ai-assist-head">
+                <div className="ai-assist-symbol" aria-hidden="true">AI</div>
+                <div><p className="eyebrow">Optional assistant</p><h2 id="evidence-ai-title">Organize evidence you already have</h2><p>Paste interview notes, test output, research excerpts, or audit notes. AI can split and classify the source, but it cannot create proof or verify itself.</p></div>
+                <span className="provisional-pill">Human approval</span>
+              </div>
+
+              {desktopAvailable !== true ? (
+                <div className="ai-assist-empty"><span>Desktop feature</span><p>Evidence organization uses the model connected in the local desktop app. The manual evidence form below remains available.</p><button className="button secondary" onClick={() => setSection("model")}>Model options</button></div>
+              ) : !llmReady ? (
+                <div className="ai-assist-empty"><span>Model required</span><p>Connect a model first, then return here with the actual source material.</p><button className="button secondary" onClick={() => setSection("model")}>Connect a model</button></div>
+              ) : (
+                <div className="evidence-source-workspace">
+                  <div className="ai-model-line"><span className={llmUsesRemoteEndpoint ? "cloud" : "local"}>{llmUsesRemoteEndpoint ? "Cloud" : "Local"}</span><strong>{llmConfig.model}</strong><small>{llmUsesRemoteEndpoint ? "The source text is sent to the selected provider only when you click Send & organize. Remove sensitive details you do not want to share." : "The source stays on this computer when the endpoint is local."}</small></div>
+                  <div className="evidence-source-grid">
+                    <label className="full-field"><span>Source title</span><input maxLength={300} value={evidenceSource.label} placeholder="Example: Operator interview 03" onChange={(event) => setEvidenceSource((current) => ({ ...current, label: event.target.value }))} /></label>
+                    <label className="full-field source-text-field"><span>Actual source text</span><textarea rows={8} maxLength={100_000} value={evidenceSource.text} placeholder="Paste the source contents here. A URL by itself is not evidence." onChange={(event) => setEvidenceSource((current) => ({ ...current, text: event.target.value }))} /></label>
+                  </div>
+                  <div className="ai-action-row"><span>The full source is used for this run but is not saved in the review. Approved records keep exact excerpts and a source fingerprint.</span><button className="button primary" disabled={aiAssistBusy !== null || !evidenceSource.label.trim() || evidenceSource.text.trim().length < 20} onClick={() => void organizeEvidenceWithAi()}>{aiAssistBusy === "evidence" ? "Organizing…" : llmUsesRemoteEndpoint ? "Send & organize" : "Organize with AI"}</button></div>
+                </div>
+              )}
+
+              {aiUndoAvailable && aiUndo && <div className="ai-undo-bar" role="status"><span>Last AI-assisted approval: {aiUndo.label}</span><button className="text-button" onClick={undoLastAiApproval}>Undo</button></div>}
+
+              {evidenceAnalysis && (
+                <div className="ai-draft-panel">
+                  <div className="ai-draft-summary"><div><strong>Provisional extraction</strong><span>{evidenceAnalysis.result.provider} · {evidenceAnalysis.result.model} · {new Date(evidenceAnalysis.createdAt).toLocaleString()}</span></div><span>{evidenceAnalysis.result.evidence.filter((proposal) => !proposal.unverifiable).length} grounded · {evidenceAnalysis.result.evidence.filter((proposal) => proposal.unverifiable).length} rejected</span></div>
+                  {evidenceAnalysis.sourceFingerprint !== evidenceSourceFingerprint && <div className="ai-stale-warning" role="status"><strong>Source changed.</strong><span>This extraction no longer matches the pasted source. Run it again before applying records.</span></div>}
+                  <div className="ai-queue-toolbar"><span>No extracted records are selected automatically.</span><div><button className="text-button" disabled={evidenceAnalysis.sourceFingerprint !== evidenceSourceFingerprint} onClick={() => setSelectedEvidenceProposals(evidenceAnalysis.result.evidence.map((proposal, index) => ({ proposal, index })).filter(({ proposal }) => !proposal.unverifiable && proposal.sourceExcerpt && evidenceSource.text.includes(proposal.sourceExcerpt)).map(({ index }) => index))}>Select grounded drafts</button><button className="text-button" onClick={() => setSelectedEvidenceProposals([])}>Clear</button></div></div>
+                  <div className="evidence-proposal-list">
+                    {evidenceAnalysis.result.evidence.map((proposal, index) => {
+                      const grounded = !proposal.unverifiable && Boolean(proposal.sourceExcerpt) && evidenceSource.text.includes(proposal.sourceExcerpt);
+                      return (
+                        <article className={`evidence-proposal ${selectedEvidenceProposals.includes(index) ? "selected" : ""} ${grounded ? "" : "rejected"}`} key={`${proposal.title}-${index}`}>
+                          <label className="ai-proposal-check"><input type="checkbox" checked={selectedEvidenceProposals.includes(index)} disabled={!grounded || evidenceAnalysis.sourceFingerprint !== evidenceSourceFingerprint} onChange={(event) => setSelectedEvidenceProposals((current) => event.target.checked ? [...new Set([...current, index])] : current.filter((proposalIndex) => proposalIndex !== index))} /><span className="sr-only">Select extracted record {index + 1}</span></label>
+                          <div className="evidence-proposal-main">
+                            <div className="evidence-proposal-title"><input aria-label={`Evidence title ${index + 1}`} maxLength={180} value={proposal.title} onChange={(event) => updateEvidenceProposal(index, { title: event.target.value })} /><span className={`confidence confidence-${proposal.confidence}`}>{proposal.confidence}</span></div>
+                            {grounded ? <blockquote>{proposal.sourceExcerpt}</blockquote> : <div className="rejected-excerpt"><strong>Not grounded in the pasted source</strong><span>{proposal.unverifiableReason || "The proposed excerpt was not found verbatim, so this record cannot be approved."}</span></div>}
+                            <p>{proposal.reasoning}</p>{proposal.uncertainty && <small>Uncertainty: {proposal.uncertainty}</small>}
+                          </div>
+                          <div className="evidence-proposal-fields">
+                            <label><span>Claim link</span><select value={proposal.claimIds[0] ?? "1A"} onChange={(event) => updateEvidenceProposal(index, { claimIds: [event.target.value] })}>{RUBRIC.map((row) => <option value={row.claimId} key={row.claimId}>{row.claimId} · {row.atomicClaim}</option>)}</select><small>Linked: {proposal.claimIds.join(", ")}. Choosing another replaces all links.</small></label>
+                            <label><span>Direction</span><select value={proposal.direction} onChange={(event) => updateEvidenceProposal(index, { direction: event.target.value as EvidenceProposal["direction"] })}><option value="supports">Supports</option><option value="contradicts">Contradicts</option></select></label>
+                            <label><span>Type</span><select value={proposal.suggestedType} onChange={(event) => { const nextType = event.target.value as EvidenceType; const cappedGrade = EVIDENCE_RANK[proposal.suggestedGrade] > EVIDENCE_TYPE_MAX_RANK[nextType] ? `E${EVIDENCE_TYPE_MAX_RANK[nextType]}` as EvidenceGrade : proposal.suggestedGrade; updateEvidenceProposal(index, { suggestedType: nextType, suggestedGrade: cappedGrade }); }}>{EVIDENCE_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
+                            <label><span>Grade</span><select value={proposal.suggestedGrade} onChange={(event) => updateEvidenceProposal(index, { suggestedGrade: event.target.value as EvidenceGrade })}>{EVIDENCE_GRADES.map((grade) => <option key={grade} disabled={EVIDENCE_RANK[grade] > EVIDENCE_TYPE_MAX_RANK[proposal.suggestedType]}>{grade}</option>)}</select><small>Max E{EVIDENCE_TYPE_MAX_RANK[proposal.suggestedType]} for {proposal.suggestedType}</small></label>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  <section className="human-approval-panel">
+                    <div><p className="eyebrow">Human approval</p><h3>Complete the provenance before adding records</h3><p>AI never fills reviewer identity, conflict disclosure, dates, or verification. Those attestations are yours.</p></div>
+                    <div className="field-grid">
+                      <label><span>Observed date</span><input type="date" value={evidenceSource.evidenceDate} onChange={(event) => setEvidenceSource((current) => ({ ...current, evidenceDate: event.target.value }))} /></label>
+                      <label><span>Expiry date</span><input type="date" value={evidenceSource.expiryDate} onChange={(event) => setEvidenceSource((current) => ({ ...current, expiryDate: event.target.value }))} /></label>
+                      <label><span>Reviewer</span><input value={evidenceSource.reviewer} placeholder="Required for E2+" onChange={(event) => setEvidenceSource((current) => ({ ...current, reviewer: event.target.value }))} /></label>
+                      <label><span>Relationship / conflict</span><input value={evidenceSource.relationshipOrConflict} placeholder="Write None when none" onChange={(event) => setEvidenceSource((current) => ({ ...current, relationshipOrConflict: event.target.value }))} /></label>
+                    </div>
+                    <label className="check-field"><input type="checkbox" checked={evidenceHumanVerificationCurrent} onChange={(event) => setEvidenceSource((current) => ({ ...current, reviewerVerified: event.target.checked, verificationFingerprint: event.target.checked ? currentEvidenceVerificationFingerprint : "" }))} /><span>I reviewed the source and personally verify the selected evidence records</span></label>
+                    <label className="check-field"><input type="checkbox" checked={evidenceSource.updateClaimGrades} onChange={(event) => setEvidenceSource((current) => ({ ...current, updateClaimGrades: event.target.checked }))} /><span>For supporting records, explicitly link them and use the approved grades on their claims</span></label>
+                    {selectedEvidenceNeedsVerification && (!evidenceHumanVerificationCurrent || !evidenceSource.reviewer.trim() || !evidenceSource.relationshipOrConflict.trim()) && <div className="approval-requirement" role="status">E2+ records require a fresh verification of this exact selection, reviewer name, and relationship/conflict disclosure.</div>}
+                    <div className="ai-apply-row"><span>Contradictions are added but never acknowledged automatically. The pasted full source is not stored.</span><button className="button primary" disabled={selectedEvidenceProposals.length === 0 || evidenceAnalysis.sourceFingerprint !== evidenceSourceFingerprint || !evidenceSource.evidenceDate || !evidenceSource.expiryDate || (selectedEvidenceNeedsVerification && (!evidenceHumanVerificationCurrent || !evidenceSource.reviewer.trim() || !evidenceSource.relationshipOrConflict.trim()))} onClick={applySelectedEvidence}>Add {selectedEvidenceProposals.length || "selected"} to ledger</button></div>
+                  </section>
+                </div>
+              )}
+            </section>
             <div className="evidence-layout">
               <section className="form-card evidence-form">
                 <div className="form-card-head"><div><h3>Add an evidence record</h3><p>Grades apply to a claim—not to a document in the abstract.</p></div><code>{state.review.artifacts.length + 1}</code></div>
@@ -1442,7 +2060,7 @@ export default function Home() {
                 <div className="ledger-table">
                   {state.review.artifacts.map((artifact) => (
                     <article key={artifact.artifactId} className={`ledger-row direction-${artifact.direction}`}>
-                      <div><code>{artifact.artifactId}</code><strong>{artifact.title}</strong><span>{artifact.evidenceType} · {artifact.evidenceClaimId}</span></div>
+                      <div><code>{artifact.artifactId}</code><strong>{artifact.title}</strong><span title={artifact.sourceExcerpt}>{artifact.evidenceType} · {artifact.evidenceClaimId}{artifact.ingestionOrigin ? " · AI-organized, human-approved" : ""}</span></div>
                       <div><span>Claim</span><strong>{artifact.rubricClaimIds.join(", ")}</strong></div>
                       <div><span>Grade</span><strong>{artifact.grade}</strong></div>
                       <div><span>Direction</span><strong>{artifact.direction}</strong></div>
@@ -1511,7 +2129,9 @@ export default function Home() {
       </section>
 
       <nav className="mobile-nav" aria-label="Mobile workspace">
-        {primaryNavigation.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}>{item.label}</button>)}
+        {primaryNavigation.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}
+        <button className={utilityNavigation.some((item) => item.id === section) ? "active" : ""} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((current) => !current)}>More</button>
+        {mobileMoreOpen && <div className="mobile-more-menu" role="menu" aria-label="More workspace tools">{utilityNavigation.map((item) => <button role="menuitem" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}</div>}
       </nav>
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>

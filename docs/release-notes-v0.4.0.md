@@ -18,11 +18,15 @@ Version 0.4.0 makes the desktop app faster to understand, much easier to connect
 
 ## Integrity and security
 
-- The scoring rubric, 51 claims, evidence rules, caps, floors, and gates are unchanged.
+- The scoring rubric, 51 claims, caps, floors, and gates are unchanged.
+- Evidence dated after the review cutoff is rejected and excluded, and expiry dates can no longer predate the observation.
+- Invalid, duplicated, expired, future-dated, or incompletely reviewed evidence contributes zero. Typed caps and floors now require one artifact to satisfy both the required grade and evidence type.
+- Reprocessing the same source reuses its source family, while duplicate excerpts are rejected instead of being counted as new evidence.
 - AI output remains a staged draft. It never supplies rubric weights, totals, final scores, or advancement decisions, and it cannot change the deterministic calculator.
 - The AI cannot verify its own evidence. E2 or higher requires an explicit human verification action, a reviewer name, and a conflict disclosure before approval.
 - The full pasted evidence source is not persisted. Approved artifacts retain only the accepted excerpt, a source fingerprint, and model provenance for auditability.
 - OpenRouter remains pinned to `https://openrouter.ai/api/v1`; typeahead text is URL-encoded and API keys remain header-only.
+- Other remote compatible endpoints must use HTTPS, and saved API keys are bound to both their provider and exact endpoint.
 - Credentials remain protected by the operating system and are excluded from projects, exports, and browser storage.
 - Ollama and LM Studio keep prompts on the local model server. OpenRouter and other remote compatible providers receive the operation-specific idea, review, or pasted evidence context only when the user invokes that assistant.
 

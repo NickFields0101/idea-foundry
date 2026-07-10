@@ -1,6 +1,6 @@
 import rubricData from "./rubric.json" with { type: "json" };
 
-export const ENGINE_VERSION = "v3-powershell-parity/1.0.1";
+export const ENGINE_VERSION = "v3-powershell-parity/1.0.2";
 export const FRAMEWORK_VERSION = "v3";
 export const RUBRIC_MANIFEST_SHA256 =
   "fa940feea694ee4df4aa064d2fc418e68a879f318c11e72cfbc4bf5a9d1c1d67";
@@ -455,6 +455,31 @@ function isUnexpired(expiryDate: string, cutoffDate: string) {
   return isValidDate(expiryDate) && isValidDate(cutoffDate) && dayNumber(expiryDate) >= dayNumber(cutoffDate);
 }
 
+function isObservedByCutoff(evidenceDate: string, cutoffDate: string) {
+  return isValidDate(evidenceDate) && isValidDate(cutoffDate) && dayNumber(evidenceDate) <= dayNumber(cutoffDate);
+}
+
+function isEligibleSupportArtifact(artifact: EvidenceArtifact, cutoffDate: string) {
+  if (artifact.direction !== "supports" || !isEvidenceGrade(artifact.grade) || !isEvidenceType(artifact.evidenceType)) {
+    return false;
+  }
+  const rank = EVIDENCE_RANK[artifact.grade];
+  if (
+    rank === 0 ||
+    rank > EVIDENCE_TYPE_MAX_RANK[artifact.evidenceType] ||
+    String(artifact.duplicateOf ?? "").trim() ||
+    !isObservedByCutoff(artifact.evidenceDate, cutoffDate) ||
+    !isUnexpired(artifact.expiryDate, cutoffDate)
+  ) {
+    return false;
+  }
+  return rank < 2 || (
+    artifact.reviewerVerified &&
+    Boolean(String(artifact.reviewer ?? "").trim()) &&
+    Boolean(String(artifact.relationshipOrConflict ?? "").trim())
+  );
+}
+
 function roundHalfEven(value: number, decimals: number) {
   const factor = 10 ** decimals;
   const scaled = value * factor;
@@ -721,8 +746,16 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
       validationErrors.push(`${label}: ${artifact.evidenceType} cannot support ${artifact.grade}.`);
     }
     if (validGrade && artifact.grade !== "E0") {
-      if (!isValidDate(artifact.evidenceDate)) validationErrors.push(`${label}: evidence date is required.`);
-      if (!isValidDate(artifact.expiryDate)) validationErrors.push(`${label}: expiry date is required.`);
+      const validEvidenceDate = isValidDate(artifact.evidenceDate);
+      const validExpiryDate = isValidDate(artifact.expiryDate);
+      if (!validEvidenceDate) validationErrors.push(`${label}: evidence date is required.`);
+      if (!validExpiryDate) validationErrors.push(`${label}: expiry date is required.`);
+      if (validEvidenceDate && isValidDate(input.cutoffDate) && dayNumber(artifact.evidenceDate) > dayNumber(input.cutoffDate)) {
+        validationErrors.push(`${label}: evidence date cannot be after the review cutoff.`);
+      }
+      if (validEvidenceDate && validExpiryDate && dayNumber(artifact.expiryDate) < dayNumber(artifact.evidenceDate)) {
+        validationErrors.push(`${label}: expiry date cannot be earlier than the evidence date.`);
+      }
     }
     if (validGrade && EVIDENCE_RANK[artifact.grade] >= 2) {
       if (!artifact.reviewerVerified) validationErrors.push(`${label}: E2+ evidence must be reviewer verified.`);
@@ -743,6 +776,7 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
   }
 
   const claimResults: ClaimResult[] = [];
+  const eligibleSupportsByClaim = new Map<string, EvidenceArtifact[]>();
   let lockedWeightTotal = 0;
   let rawTotal = 0;
   let validatedTotal = 0;
@@ -818,27 +852,25 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
       }
     }
 
-    const supports = linked.filter(
-      (artifact) =>
-        artifact.direction === "supports" &&
-        isEvidenceGrade(artifact.grade) &&
-        isEvidenceType(artifact.evidenceType) &&
-        !String(artifact.duplicateOf ?? "").trim() &&
-        isUnexpired(artifact.expiryDate, input.cutoffDate) &&
-        (EVIDENCE_RANK[artifact.grade] < 2 || artifact.reviewerVerified),
-    );
+    const supports = linked.filter((artifact) => isEligibleSupportArtifact(artifact, input.cutoffDate));
+    eligibleSupportsByClaim.set(row.claimId, supports);
     const contradictions = allRubricLinked.filter(
-      (artifact) => artifact.direction === "contradicts" && isUnexpired(artifact.expiryDate, input.cutoffDate),
+      (artifact) =>
+        artifact.direction === "contradicts" &&
+        isObservedByCutoff(artifact.evidenceDate, input.cutoffDate) &&
+        isUnexpired(artifact.expiryDate, input.cutoffDate),
     );
-    const evidenceRank = EVIDENCE_RANK[declaredGrade];
-    if (evidenceRank > 0) {
+    const declaredEvidenceRank = EVIDENCE_RANK[declaredGrade];
+    const maximumEligibleRank = supports.length === 0
+      ? 0
+      : Math.max(...supports.map((artifact) => EVIDENCE_RANK[artifact.grade]));
+    const evidenceRank = Math.min(declaredEvidenceRank, maximumEligibleRank);
+    const appliedGrade = EVIDENCE_GRADES[evidenceRank];
+    if (declaredEvidenceRank > 0) {
       if (supports.length === 0) {
         validationErrors.push(`Claim ${row.claimId}: ${declaredGrade} has no eligible supporting evidence.`);
-      } else {
-        const maximumRank = Math.max(...supports.map((artifact) => EVIDENCE_RANK[artifact.grade]));
-        if (evidenceRank > maximumRank) {
-          validationErrors.push(`Claim ${row.claimId}: ${declaredGrade} exceeds linked eligible evidence.`);
-        }
+      } else if (declaredEvidenceRank > maximumEligibleRank) {
+        validationErrors.push(`Claim ${row.claimId}: ${declaredGrade} exceeds linked eligible evidence.`);
       }
     }
     for (const contradiction of contradictions) {
@@ -849,7 +881,7 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
       }
     }
 
-    const multiplier = EVIDENCE_MULTIPLIER[declaredGrade];
+    const multiplier = EVIDENCE_MULTIPLIER[appliedGrade];
     const rawPoints = weight * rawMerit / 5;
     const validatedPoints = rawPoints * multiplier;
     const confidencePoints = weight * multiplier;
@@ -867,7 +899,7 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
       atomicClaim: row.atomicClaim,
       weight,
       rawMerit,
-      evidence: declaredGrade,
+      evidence: appliedGrade,
       evidenceRank,
       evidenceTypes: unique(supports.map((artifact) => artifact.evidenceType)),
       rawPoints,
@@ -910,10 +942,15 @@ export function scoreReview(input: ReviewInput): ScoreOutput {
   const getCategory = (categoryId: string) => categorySummaries.find((category) => category.id === categoryId)!;
   const claimPasses = (claimId: string, minimumRank: number, allowedTypes: EvidenceType[] = []) => {
     const claim = getClaim(claimId);
+    const supports = eligibleSupportsByClaim.get(claimId) ?? [];
     return Boolean(
       claim &&
         claim.evidenceRank >= minimumRank &&
-        (allowedTypes.length === 0 || claim.evidenceTypes.some((type) => allowedTypes.includes(type))),
+        supports.some(
+          (artifact) =>
+            EVIDENCE_RANK[artifact.grade] >= minimumRank &&
+            (allowedTypes.length === 0 || allowedTypes.includes(artifact.evidenceType)),
+        ),
     );
   };
 

@@ -386,6 +386,9 @@ export function applyEvidenceProposals(
   assertFresh(input.expectedContextFingerprint, input.currentContextFingerprint);
   const claimById = claimMapFor(input.review);
   validateExistingArtifactIds(input.review);
+  if (!input.draft || !Array.isArray(input.draft.evidence)) {
+    throw new AiAssistanceError("invalid_proposal", "The AI evidence draft is malformed. Generate a fresh draft.");
+  }
   assertUniqueIndexes(input.selectedProposalIndexes, "Selected evidence");
   const linkIndexes = input.linkSupportingProposalIndexes ?? [];
   assertUniqueIndexes(linkIndexes, "Evidence links");
@@ -408,7 +411,25 @@ export function applyEvidenceProposals(
   const evidenceClaimIds = new Set(review.artifacts.map((artifact) => normalizedId(artifact.evidenceClaimId)));
   const observationIds = new Set(review.artifacts.map((artifact) => normalizedId(artifact.observationId)));
   const sourceFamilyIds = new Set(review.artifacts.map((artifact) => normalizedId(artifact.sourceFamilyId)));
-  const sourceFamilyId = allocateId("SF", sourceFamilyIds);
+  const sameSourceArtifacts = review.artifacts.filter(
+    (artifact) => artifact.sourceContentSha256 === sourceHash,
+  );
+  if (sameSourceArtifacts.some((artifact) => !String(artifact.sourceFamilyId ?? "").trim())) {
+    throw new AiAssistanceError("invalid_review", "Existing evidence for this source is missing its source-family ID.");
+  }
+  const sameSourceFamilyIds = new Set(sameSourceArtifacts.map((artifact) => normalizedId(artifact.sourceFamilyId)));
+  if (sameSourceFamilyIds.size > 1) {
+    throw new AiAssistanceError("invalid_review", "The same source is assigned to multiple source families.");
+  }
+  const existingFamilyId = String(sameSourceArtifacts[0]?.sourceFamilyId ?? "").trim();
+  const sourceFamilyId = existingFamilyId || allocateId("SF", sourceFamilyIds);
+  const existingSourceExcerpts = new Set(
+    sameSourceArtifacts
+      .map((artifact) => artifact.sourceExcerpt)
+      .filter((excerpt): excerpt is string => Boolean(excerpt))
+      .map(canonicalSourceContent),
+  );
+  const selectedSourceExcerpts = new Set<string>();
   const linkedClaimIds = new Set<string>();
   const artifacts: EvidenceArtifact[] = [];
   const gradeAdjustments: EvidenceGradeAdjustment[] = [];
@@ -416,6 +437,14 @@ export function applyEvidenceProposals(
   for (const proposalIndex of input.selectedProposalIndexes) {
     const proposal = input.draft.evidence[proposalIndex];
     const rubricClaimIds = validateEvidenceProposal(proposal, proposalIndex, input.sourceText, claimById);
+    const excerptIdentity = canonicalSourceContent(proposal.sourceExcerpt);
+    if (existingSourceExcerpts.has(excerptIdentity) || selectedSourceExcerpts.has(excerptIdentity)) {
+      throw new AiAssistanceError(
+        "invalid_selection",
+        `Evidence proposal ${proposalIndex + 1} repeats an excerpt already recorded from this source.`,
+      );
+    }
+    selectedSourceExcerpts.add(excerptIdentity);
     const requestedRank = EVIDENCE_GRADES.indexOf(proposal.suggestedGrade);
     const appliedRank = Math.min(requestedRank, EVIDENCE_TYPE_MAX_RANK[proposal.suggestedType]);
     const appliedGrade = EVIDENCE_GRADES[appliedRank];
@@ -434,6 +463,12 @@ export function applyEvidenceProposals(
       throw new AiAssistanceError(
         "verification_required",
         "Evidence expiry date cannot be earlier than its evidence date.",
+      );
+    }
+    if (appliedRank > 0 && isIsoDate(review.cutoffDate) && approval.evidenceDate > review.cutoffDate) {
+      throw new AiAssistanceError(
+        "verification_required",
+        "Evidence date cannot be after the review cutoff date.",
       );
     }
     if (

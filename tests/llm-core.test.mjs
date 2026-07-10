@@ -54,6 +54,14 @@ test("normalizes endpoints and keeps named local providers on loopback", () => {
     (error) => error instanceof ConnectorError && error.code === "non_local_endpoint",
   );
   assert.throws(() => normalizeConfig({ provider: "openaiCompatible", baseUrl: "file:///tmp/model" }), /HTTP or HTTPS/);
+  assert.throws(
+    () => normalizeConfig({ provider: "openaiCompatible", baseUrl: "http://models.example/v1", apiKey: "secret" }),
+    (error) => error instanceof ConnectorError && error.code === "insecure_endpoint",
+  );
+  assert.equal(
+    normalizeConfig({ provider: "openaiCompatible", baseUrl: "http://127.0.0.1:8080/v1" }).baseUrl,
+    "http://127.0.0.1:8080/v1",
+  );
   assert.throws(() => normalizeConfig({ provider: "unknown", baseUrl: "https://models.example/v1" }), /supported model provider/);
 
   const openRouter = normalizeConfig({ provider: "openrouter", model: "anthropic/claude-sonnet-4" });
@@ -67,6 +75,16 @@ test("normalizes endpoints and keeps named local providers on loopback", () => {
     { provider: "openaiCompatible", apiKey: "must-not-cross-providers" },
   );
   assert.equal(switchedProvider.apiKey, "");
+  const sameEndpoint = normalizeConfig(
+    { provider: "openaiCompatible", baseUrl: "https://models.example/v1/" },
+    { provider: "openaiCompatible", baseUrl: "https://models.example/v1", apiKey: "endpoint-bound" },
+  );
+  assert.equal(sameEndpoint.apiKey, "endpoint-bound");
+  const changedEndpoint = normalizeConfig(
+    { provider: "openaiCompatible", baseUrl: "https://other.example/v1" },
+    { provider: "openaiCompatible", baseUrl: "https://models.example/v1", apiKey: "must-not-move" },
+  );
+  assert.equal(changedEndpoint.apiKey, "");
 });
 
 test("lists Ollama models from the native local endpoint", async () => {

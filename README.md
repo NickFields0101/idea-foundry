@@ -33,7 +33,7 @@ The packaged desktop app runs locally and supports:
 - Ollama on `http://127.0.0.1:11434`
 - LM Studio on `http://127.0.0.1:1234/v1`
 - OpenRouter on the locked `https://openrouter.ai/api/v1` endpoint with a user-supplied API key
-- A user-selected OpenAI-compatible HTTP or HTTPS endpoint
+- A user-selected OpenAI-compatible HTTPS endpoint, or an HTTP loopback endpoint on the same computer
 - API credentials encrypted through the operating system
 
 The renderer has no direct network authority. A narrow, isolated desktop bridge handles configuration, connection testing, model discovery, idea generation, and the optional review assistants. Local providers are restricted to loopback addresses.
@@ -75,10 +75,11 @@ If you choose a cloud provider, the relevant idea, review context, or pasted evi
 ## Scoring integrity
 
 - Framework: `v3`
-- Engine: `v3-powershell-parity/1.0.1`
+- Engine: `v3-powershell-parity/1.0.2`
 - Canonical claims: `51`
 - Archetype weights: exactly `100` for Application, Enterprise, Protocol/Infrastructure, and Marketplace/DePIN
 - Rubric manifest SHA-256: `fa940feea694ee4df4aa064d2fc418e68a879f318c11e72cfbc4bf5a9d1c1d67`
+- A claim is scored only to the strongest fully eligible linked artifact. Rank and evidence type must be satisfied by the same artifact for typed caps and stage floors.
 - Rounding: midpoint-to-even where required by the canonical calculator
 
 **Numeric + gate ready** is not a final investment, financing, launch, safety, or governance decision. Team coverage, role design, financing approval, independent review, and human judgment remain separate.
@@ -95,6 +96,7 @@ If you choose a cloud provider, the relevant idea, review context, or pasted evi
 - The evidence organizer does not persist the full pasted source. Approved artifacts retain only the accepted excerpt, source fingerprint, and model provenance.
 - Ollama and LM Studio are forced to localhost in their named connector modes.
 - OpenRouter is pinned to its official HTTPS API URL so its key cannot be redirected to another host.
+- Other remote endpoints must use HTTPS. Saved keys are bound to the exact provider and endpoint and are cleared when that boundary changes.
 - Choosing OpenRouter sends the displayed prompt and operation-specific context to OpenRouter and the selected upstream model provider. Other remote compatible endpoints receive the same material; the UI warns about these boundaries.
 - Do not enter wallet seeds, regulated personal data, or confidential evidence bodies.
 

@@ -113,7 +113,7 @@ function evidenceProposal(overrides: Partial<EvidenceProposal> = {}): EvidencePr
   };
 }
 
-function evidenceDraft(evidence: EvidenceProposal[]): ExtractEvidenceResult {
+function evidenceDraft(evidence: EvidenceProposal[] = [evidenceProposal()]): ExtractEvidenceResult {
   return {
     evidence,
     sourceLabel: "Interview notes, July 10",
@@ -277,6 +277,48 @@ test("evidence approval requires exact normalized excerpts and creates traceable
   assert.deepEqual(result.linkedClaimIds, ["1A"]);
 });
 
+test("repeat processing reuses a source family and rejects duplicate excerpts", () => {
+  const sourceText = "Earlier observation. Three of five buyers asked for a paid pilot.";
+  const review = reviewFixture();
+  review.artifacts.push({
+    artifactId: "A-009",
+    evidenceClaimId: "EC-009",
+    title: "Earlier observation",
+    rubricClaimIds: ["1A"],
+    sourceFamilyId: "SF-009",
+    observationId: "OBS-009",
+    duplicateOf: "",
+    reviewerVerified: false,
+    reviewer: "",
+    relationshipOrConflict: "",
+    evidenceType: "FounderAssertion",
+    evidenceDate: "",
+    expiryDate: "",
+    grade: "E0",
+    direction: "supports",
+    sourceExcerpt: "Earlier observation.",
+    sourceContentSha256: sourceContentSha256(sourceText),
+  });
+  const draft = evidenceDraft();
+  const common = {
+    draft,
+    selectedProposalIndexes: [0],
+    sourceText,
+    sourceLabel: "Buyer interviews",
+    humanApproval,
+    expectedContextFingerprint: "fp",
+    currentContextFingerprint: "fp",
+  };
+
+  const result = applyEvidenceProposals({ ...common, review });
+  assert.equal(result.sourceFamilyId, "SF-009");
+  assert.equal(result.artifacts[0].sourceFamilyId, "SF-009");
+  assert.throws(
+    () => applyEvidenceProposals({ ...common, review: result.review }),
+    (error) => errorCode(error) === "invalid_selection",
+  );
+});
+
 test("evidence approval independently enforces source matching, verification, ceilings, and stale context", async (t) => {
   const base = {
     review: reviewFixture(),
@@ -335,6 +377,17 @@ test("evidence approval independently enforces source matching, verification, ce
         ...base,
         draft,
         humanApproval: { ...humanApproval, expiryDate: "2026-07-09" },
+      }),
+      (error) => errorCode(error) === "verification_required",
+    );
+  });
+  await t.test("evidence cannot postdate the review cutoff", () => {
+    const draft = evidenceDraft([evidenceProposal()]);
+    assert.throws(
+      () => applyEvidenceProposals({
+        ...base,
+        draft,
+        humanApproval: { ...humanApproval, evidenceDate: "2026-07-11", expiryDate: "2027-07-11" },
       }),
       (error) => errorCode(error) === "verification_required",
     );

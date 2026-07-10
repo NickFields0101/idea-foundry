@@ -88,8 +88,12 @@ async function writeConfig(input = {}) {
   const config = normalizeConfig(input, { ...previous, apiKey: previousKey });
   assertProviderReady(config);
   const providerChanged = Boolean(previous.provider && previous.provider !== config.provider);
-  let encryptedApiKey = input.clearApiKey === true || providerChanged ? "" : String(previous.encryptedApiKey ?? "");
-  if (typeof input.apiKey === "string" && input.apiKey.trim()) {
+  const endpointChanged = Boolean(previous.encryptedApiKey)
+    && String(previous.baseUrl ?? "") !== config.baseUrl;
+  let encryptedApiKey = input.clearApiKey === true || providerChanged || endpointChanged
+    ? ""
+    : String(previous.encryptedApiKey ?? "");
+  if (input.clearApiKey !== true && typeof input.apiKey === "string" && input.apiKey.trim()) {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new ConnectorError("credential_store", "This operating system cannot securely store an API key. Choose a keyless local model or enable operating-system credential protection.");
     }

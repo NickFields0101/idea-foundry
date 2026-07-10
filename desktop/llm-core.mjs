@@ -185,6 +185,12 @@ export function normalizeConfig(input = {}, fallback = {}) {
   if ((provider === "ollama" || provider === "lmstudio") && !LOCAL_HOSTS.has(url.hostname)) {
     throw new ConnectorError("non_local_endpoint", `${provider === "ollama" ? "Ollama" : "LM Studio"} must use localhost. Choose OpenAI-compatible for a remote endpoint.`);
   }
+  if (url.protocol !== "https:" && !LOCAL_HOSTS.has(url.hostname)) {
+    throw new ConnectorError(
+      "insecure_endpoint",
+      "Remote model endpoints must use HTTPS. Plain HTTP is allowed only on this computer.",
+    );
+  }
   url.pathname = url.pathname.replace(/\/+$/, "") || "";
   if (
     provider === "openrouter" &&
@@ -192,15 +198,24 @@ export function normalizeConfig(input = {}, fallback = {}) {
   ) {
     throw new ConnectorError("invalid_endpoint", `OpenRouter is locked to ${OPENROUTER_BASE_URL} so its API key cannot be sent elsewhere.`);
   }
+  const normalizedBaseUrl = url.toString().replace(/\/$/, "");
+  let fallbackBaseUrl = "";
+  try {
+    const fallbackUrl = new URL(String(fallback.baseUrl ?? ""));
+    fallbackUrl.pathname = fallbackUrl.pathname.replace(/\/+$/, "") || "";
+    fallbackBaseUrl = fallbackUrl.toString().replace(/\/$/, "");
+  } catch {
+    fallbackBaseUrl = "";
+  }
   const explicitApiKey = String(input.apiKey ?? "").trim();
-  const sameProvider = fallback.provider === undefined || fallback.provider === provider;
+  const sameCredentialBoundary = fallback.provider === provider && fallbackBaseUrl === normalizedBaseUrl;
   const apiKey = input.clearApiKey === true
     ? ""
-    : explicitApiKey || (sameProvider ? String(fallback.apiKey ?? "").trim() : "");
+    : explicitApiKey || (sameCredentialBoundary ? String(fallback.apiKey ?? "").trim() : "");
   if (apiKey.length > 4096) throw new ConnectorError("invalid_api_key", "The API key is too long.");
   return {
     provider,
-    baseUrl: url.toString().replace(/\/$/, ""),
+    baseUrl: normalizedBaseUrl,
     model: String(input.model ?? fallback.model ?? "").trim().slice(0, 300),
     apiKey,
   };

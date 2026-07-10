@@ -30,11 +30,53 @@ test("desktop main process isolates the UI and protects credentials", async () =
 test("AI generation cannot write deterministic review inputs", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const generationStart = page.indexOf("async function generateWithConnectedLlm");
-  const generationEnd = page.indexOf("function addEvidence", generationStart);
+  const generationEnd = page.indexOf("async function saveAiConnectionOrOpenSettings", generationStart);
   assert.ok(generationStart >= 0 && generationEnd > generationStart);
   const generationFunction = page.slice(generationStart, generationEnd);
   assert.match(generationFunction, /ideas:\s*\[\.\.\.current\.ideas, \.\.\.candidates\]/);
   assert.doesNotMatch(generationFunction, /updateReview|updateClaim|updateGate|artifacts|gates|claims/);
+});
+
+test("AI review calls create staged UI drafts without mutating review input", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const draftStart = page.indexOf("async function draftEvaluationWithAi");
+  const draftEnd = page.indexOf("function updateEvaluationProposal", draftStart);
+  assert.ok(draftStart >= 0 && draftEnd > draftStart);
+  const draftFunctions = page.slice(draftStart, draftEnd);
+  assert.match(draftFunctions, /setEvaluationDraft/);
+  assert.match(draftFunctions, /setEvidenceAnalysis/);
+  assert.doesNotMatch(draftFunctions, /setState|updateReview|updateClaim|updateGate/);
+});
+
+test("evaluation context excludes private profile and deterministic scoring data", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const contextStart = page.indexOf("function evaluationContextFor");
+  const contextEnd = page.indexOf("function emptyProfile", contextStart);
+  assert.ok(contextStart >= 0 && contextEnd > contextStart);
+  const contextBuilder = page.slice(contextStart, contextEnd);
+  assert.doesNotMatch(contextBuilder, /profile|generationWeights|weights\[|validatedScore|rawThesisScore|numericEligible/);
+  assert.match(contextBuilder, /USER-AUTHORED HYPOTHESIS, NOT PROOF/);
+});
+
+test("workspace reset and import purge ephemeral AI source material", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const resetStart = page.indexOf("function resetAiWorkspace");
+  const resetEnd = page.indexOf("function updateClaim", resetStart);
+  assert.ok(resetStart >= 0 && resetEnd > resetStart);
+  const resetFunction = page.slice(resetStart, resetEnd);
+  assert.match(resetFunction, /setEvaluationNotes\(""\)/);
+  assert.match(resetFunction, /setEvaluationDraft\(null\)/);
+  assert.match(resetFunction, /setEvidenceSource\(emptyEvidenceSourceDraft\(\)\)/);
+  assert.match(resetFunction, /setEvidenceAnalysis\(null\)/);
+  assert.match(resetFunction, /setAiUndo\(null\)/);
+  assert.match(resetFunction, /generationRequestRef\.current \+= 1/);
+  assert.match(resetFunction, /setGeneratingIdeas\(false\)/);
+  const importStart = page.indexOf("function importPacket");
+  const importEnd = page.indexOf("async function copyText", importStart);
+  assert.match(page.slice(importStart, importEnd), /resetAiWorkspace\(\)/);
+  assert.match(page, /localStorage\.removeItem\(STORAGE_KEY\);[^]*resetAiWorkspace\(\)/);
+  assert.match(page, /currentEvidenceVerificationFingerprint/);
+  assert.match(page, /reviewerVerified: evidenceHumanVerificationCurrent/);
 });
 
 test("AI evaluation and evidence IPC exposes proposal-only operations", async () => {
@@ -63,9 +105,10 @@ test("OpenRouter keys stay encrypted, provider-bound, and pinned to OpenRouter",
   ]);
   assert.match(core, /openrouter:\s*OPENROUTER_BASE_URL/);
   assert.match(core, /url\.hostname !== "openrouter\.ai"/);
-  assert.match(core, /fallback\.provider === undefined \|\| fallback\.provider === provider/);
+  assert.match(core, /sameCredentialBoundary = fallback\.provider === provider && fallbackBaseUrl === normalizedBaseUrl/);
   assert.match(core, /Enter an OpenRouter API key before connecting/);
   assert.match(main, /providerChanged[^]*encryptedApiKey/);
+  assert.match(main, /endpointChanged[^]*encryptedApiKey/);
   assert.match(page, /keyRequired:\s*true/);
   assert.match(page, /never written to projects, exports, or browser storage/);
   assert.doesNotMatch(page, /sk-or-v1-[A-Za-z0-9]/);
