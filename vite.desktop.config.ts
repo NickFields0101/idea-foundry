@@ -8,7 +8,7 @@ const outputDirectory = fileURLToPath(new URL("./desktop-dist", import.meta.url)
 export default defineConfig({
   root: rendererRoot,
   base: "./",
-  publicDir: false,
+  publicDir: fileURLToPath(new URL("./public/brand", import.meta.url)),
   plugins: [react()],
   resolve: {
     alias: {

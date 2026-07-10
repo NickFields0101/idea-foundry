@@ -40,17 +40,16 @@ import type {
   NormalizedGeneratedIdea,
   SaveLlmConfigInput,
 } from "./desktop-bridge";
-import brandIconAsset from "../public/brand/idea-foundry-icon.png";
-import brandLogoAsset from "../public/brand/idea-foundry-logo.png";
-import brandMarkAsset from "../public/brand/idea-foundry-mark-transparent.png";
 
-function staticAssetUrl(asset: string | { src: string }) {
-  return typeof asset === "string" ? asset : asset.src;
+function brandAssetUrl(filename: string) {
+  return typeof window !== "undefined" && window.ideaFoundry?.desktop
+    ? `./${filename}`
+    : `/brand/${filename}`;
 }
 
-const BRAND_ICON_URL = staticAssetUrl(brandIconAsset);
-const BRAND_LOGO_URL = staticAssetUrl(brandLogoAsset);
-const BRAND_MARK_URL = staticAssetUrl(brandMarkAsset);
+const BRAND_ICON_URL = brandAssetUrl("idea-foundry-icon.png");
+const BRAND_LOGO_URL = brandAssetUrl("idea-foundry-logo.png");
+const BRAND_MARK_URL = brandAssetUrl("idea-foundry-mark-transparent.png");
 
 type Section = "overview" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "export";
 
