@@ -96,6 +96,16 @@ export interface EvidenceArtifact {
   grade: EvidenceGrade;
   direction: "supports" | "contradicts";
   sourceLocation?: string;
+  /** Exact excerpt approved by the reviewer from the supplied source. */
+  sourceExcerpt?: string;
+  /** SHA-256 of the canonicalized supplied source content. */
+  sourceContentSha256?: string;
+  /** Provenance for artifacts staged through the optional AI organizer. */
+  ingestionOrigin?: {
+    kind: "ai-assisted";
+    provider: string;
+    model: string;
+  };
 }
 
 export interface GateAssessment {

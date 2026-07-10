@@ -13,7 +13,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "pretest": "vinext build",
-    "test": "node --test tests/scoring.test.ts tests/model-search.test.ts tests/llm-core.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs",
+    "test": "node --test tests/scoring.test.ts tests/ai-assistance.test.ts tests/model-search.test.ts tests/llm-core.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs",
     "desktop:build": "vite build --config vite.desktop.config.ts",
     "desktop:typecheck": "tsc -p tsconfig.desktop.json",
     "predesktop:run": "npm run desktop:build",
