@@ -11,6 +11,8 @@ const CHANNELS = Object.freeze({
   testConnection: "idea-foundry:llm:test-connection",
   listModels: "idea-foundry:llm:list-models",
   generateIdeas: "idea-foundry:llm:generate-ideas",
+  draftEvaluation: "idea-foundry:llm:draft-evaluation",
+  extractEvidence: "idea-foundry:llm:extract-evidence",
 });
 
 contextBridge.exposeInMainWorld("ideaFoundry", Object.freeze({
@@ -24,5 +26,7 @@ contextBridge.exposeInMainWorld("ideaFoundry", Object.freeze({
     testConnection: (input) => ipcRenderer.invoke(CHANNELS.testConnection, input),
     listModels: (input) => ipcRenderer.invoke(CHANNELS.listModels, input),
     generateIdeas: (input) => ipcRenderer.invoke(CHANNELS.generateIdeas, input),
+    draftEvaluation: (input) => ipcRenderer.invoke(CHANNELS.draftEvaluation, input),
+    extractEvidence: (input) => ipcRenderer.invoke(CHANNELS.extractEvidence, input),
   }),
 }));

@@ -326,6 +326,103 @@ test("evidence types enforce their canonical maximum grades", () => {
   }
 });
 
+test("only fully eligible single artifacts can contribute points or satisfy typed floors", async (t) => {
+  await t.test("grade/type ceiling violations contribute zero", () => {
+    const input = buildReview({
+      stage: "discovery",
+      claim: (row) => row.claimId === "1A"
+        ? { merit: 5, grade: "E2", evidenceType: "DeskResearch" }
+        : { merit: 5, grade: "E0", evidenceType: "FounderAssertion" },
+    });
+    const result = scoreReview(input);
+    const claim = result.claimResults.find((item) => item.claimId === "1A")!;
+    assert.equal(claim.evidence, "E0");
+    assert.equal(claim.validatedPoints, 0);
+    assert.equal(claim.verifiedWeight, 0);
+    assert.ok(result.validationErrors.some((message) => message.includes("DeskResearch cannot support E2")));
+    assert.ok(result.numericBlockers.some((message) => message.includes("1A lacks required evidence")));
+  });
+
+  await t.test("incomplete E2+ reviewer metadata contributes zero", () => {
+    const input = buildReview({
+      stage: "discovery",
+      claim: (row) => row.claimId === "1A"
+        ? { merit: 5, grade: "E2", evidenceType: "CustomerObservation" }
+        : { merit: 5, grade: "E0", evidenceType: "FounderAssertion" },
+    });
+    input.artifacts[0].reviewer = "";
+    input.artifacts[0].relationshipOrConflict = "";
+    const result = scoreReview(input);
+    const claim = result.claimResults.find((item) => item.claimId === "1A")!;
+    assert.equal(claim.evidence, "E0");
+    assert.equal(claim.validatedPoints, 0);
+    assert.equal(claim.verifiedWeight, 0);
+    assert.ok(result.validationErrors.some((message) => message.includes("requires a reviewer")));
+    assert.ok(result.validationErrors.some((message) => message.includes("relationship/conflict disclosure")));
+  });
+
+  await t.test("rank and direct-customer type cannot be borrowed from different artifacts", () => {
+    const input = buildReview({
+      stage: "discovery",
+      claim: (row) => {
+        if (row.claimId === "1A") return { merit: 5, grade: "E2", evidenceType: "ReferenceCheck" };
+        if (row.claimId === "2B") return { merit: 5, grade: "E3", evidenceType: "CustomerCommitment" };
+        return { merit: 5, grade: "E0", evidenceType: "FounderAssertion" };
+      },
+    });
+    const lowRankDirect = artifactFor("1A", "E1", "CustomerObservation", { suffix: "LOW-DIRECT-1A" });
+    input.artifacts.push(lowRankDirect);
+    const claim = input.claims.find((item) => item.claimId === "1A")!;
+    claim.evidenceClaimIds.push(lowRankDirect.evidenceClaimId);
+    claim.evidenceArtifactIds.push(lowRankDirect.artifactId);
+
+    const result = scoreReview(input);
+    assert.equal(result.claimResults.find((item) => item.claimId === "1A")!.evidenceRank, 2);
+    assert.equal(result.policyCap, 55);
+    assert.ok(result.warnings.some((message) => message.includes("Direct Problem/Demand evidence is missing")));
+  });
+});
+
+test("evidence chronology is validated and post-cutoff artifacts cannot affect scores", () => {
+  const base = buildReview({
+    stage: "discovery",
+    claim: (row) => row.claimId === "1A"
+      ? { merit: 5, grade: "E2", evidenceType: "CustomerObservation" }
+      : { merit: 5, grade: "E0", evidenceType: "FounderAssertion" },
+  });
+
+  const futureDated = clone(base);
+  futureDated.artifacts[0].evidenceDate = "2026-07-11";
+  futureDated.artifacts[0].expiryDate = "2027-07-11";
+  const futureResult = scoreReview(futureDated);
+  assert.ok(futureResult.validationErrors.some((message) => message.includes("after the review cutoff")));
+  const futureClaim = futureResult.claimResults.find((claim) => claim.claimId === "1A")!;
+  assert.deepEqual(futureClaim.eligibleArtifactIds, []);
+  assert.equal(futureClaim.validatedPoints, 0);
+  assert.equal(futureClaim.verifiedWeight, 0);
+  assert.ok(futureResult.numericBlockers.some((message) => message.includes("1A lacks required evidence")));
+
+  const reversedDates = clone(base);
+  reversedDates.artifacts[0].expiryDate = "2026-06-30";
+  const reversedResult = scoreReview(reversedDates);
+  assert.ok(reversedResult.validationErrors.some((message) => message.includes("earlier than the evidence date")));
+
+  const overstatedGrade = clone(base);
+  overstatedGrade.claims.find((claim) => claim.claimId === "1A")!.grade = "E4";
+  overstatedGrade.artifacts[0].grade = "E1";
+  overstatedGrade.artifacts[0].evidenceType = "DeskResearch";
+  overstatedGrade.artifacts[0].reviewerVerified = false;
+  overstatedGrade.artifacts[0].reviewer = "";
+  overstatedGrade.artifacts[0].relationshipOrConflict = "";
+  const overstatedResult = scoreReview(overstatedGrade);
+  const overstatedClaim = overstatedResult.claimResults.find((claim) => claim.claimId === "1A")!;
+  assert.ok(overstatedResult.validationErrors.some((message) => message.includes("exceeds linked eligible evidence")));
+  assert.equal(overstatedClaim.evidence, "E1");
+  assert.equal(overstatedClaim.evidenceRank, 1);
+  assert.equal(overstatedClaim.validatedPoints, 0.9);
+  assert.ok(overstatedResult.numericBlockers.some((message) => message.includes("1A lacks required evidence")));
+});
+
 test("unresolved live counterevidence invalidates a packet until it is acknowledged", () => {
   const input = buildReview();
   const counterevidence = artifactFor("1A", "E1", "DeskResearch", {

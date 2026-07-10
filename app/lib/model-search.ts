@@ -4,7 +4,12 @@ export interface SearchableLlmModel {
 }
 
 function normalizeSearchText(value: string) {
-  return value.normalize("NFKD").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 export function searchLlmModels(

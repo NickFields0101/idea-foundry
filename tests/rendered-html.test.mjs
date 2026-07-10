@@ -22,10 +22,12 @@ test("server-renders the completed Idea Foundry landing page", async () => {
   const html = await response.text();
   assert.match(html, /<title>Find the idea worth disproving \| Idea Foundry — Xahau \+ Evernode<\/title>/i);
   assert.match(html, /Find the idea worth disproving\./);
-  assert.match(html, /test 51 weighted claims/i);
-  assert.match(html, /Start profile-neutral/);
-  assert.match(html, /Build a private profile/);
+  assert.match(html, /Turn a blank page into useful ideas/i);
+  assert.match(html, /Start a project/);
+  assert.match(html, /Personalize my ideas/);
+  assert.match(html, /I already have an idea/);
   assert.match(html, /No account · Saved on this device/);
+  assert.match(html, /idea-foundry-logo/i);
   assert.match(html, /og\.png/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -39,15 +41,17 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   ]);
 
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
-  assert.match(page, /Profile boundary/);
-  assert.match(page, /The LLM proposes hypotheses\. This app remains the only calculator\./);
+  assert.match(page, /changes idea ranking only—never evidence or the final decision score/i);
+  assert.match(page, /AI output stays editable and never becomes evidence or a score automatically/i);
   assert.match(page, /OpenRouter/);
   assert.match(page, /Paste your OpenRouter API key/);
+  assert.match(page, /queueModelSearch/);
+  assert.match(page, /Type 4\.8, Opus, Sonnet, Llama/);
   assert.match(page, /scoreReview\(state\.review\)/);
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);
   assert.match(layout, /images:\s*\["\/og\.png"\]/);
-  assert.match(scoring, /v3-powershell-parity\/1\.0\.1/);
+  assert.match(scoring, /v3-powershell-parity\/1\.0\.2/);
   assert.match(scoring, /numericAndGateEligible/);
   assert.match(scoring, /RUBRIC_MANIFEST_SHA256/);
   assert.doesNotMatch(page, /BEGIN (?:RSA )?PRIVATE KEY|wallet seed|secret phrase/i);

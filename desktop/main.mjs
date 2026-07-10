@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   assertProviderReady,
   ConnectorError,
+  draftEvaluation,
+  extractEvidence,
   generateIdeas,
   listModels,
   normalizeConfig,
@@ -21,6 +23,8 @@ const CHANNELS = Object.freeze({
   testConnection: "idea-foundry:llm:test-connection",
   listModels: "idea-foundry:llm:list-models",
   generateIdeas: "idea-foundry:llm:generate-ideas",
+  draftEvaluation: "idea-foundry:llm:draft-evaluation",
+  extractEvidence: "idea-foundry:llm:extract-evidence",
 });
 
 let mainWindow = null;
@@ -84,8 +88,12 @@ async function writeConfig(input = {}) {
   const config = normalizeConfig(input, { ...previous, apiKey: previousKey });
   assertProviderReady(config);
   const providerChanged = Boolean(previous.provider && previous.provider !== config.provider);
-  let encryptedApiKey = input.clearApiKey === true || providerChanged ? "" : String(previous.encryptedApiKey ?? "");
-  if (typeof input.apiKey === "string" && input.apiKey.trim()) {
+  const endpointChanged = Boolean(previous.encryptedApiKey)
+    && String(previous.baseUrl ?? "") !== config.baseUrl;
+  let encryptedApiKey = input.clearApiKey === true || providerChanged || endpointChanged
+    ? ""
+    : String(previous.encryptedApiKey ?? "");
+  if (input.clearApiKey !== true && typeof input.apiKey === "string" && input.apiKey.trim()) {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new ConnectorError("credential_store", "This operating system cannot securely store an API key. Choose a keyless local model or enable operating-system credential protection.");
     }
@@ -136,12 +144,29 @@ function registerIpc() {
   ipcMain.handle(CHANNELS.getConfig, safeHandler(getConfig));
   ipcMain.handle(CHANNELS.saveConfig, safeHandler(writeConfig));
   ipcMain.handle(CHANNELS.testConnection, safeHandler(async (input = {}) => testConnection(await resolvedConfig(input))));
-  ipcMain.handle(CHANNELS.listModels, safeHandler(async (input = {}) => listModels(await resolvedConfig(input))));
+  ipcMain.handle(CHANNELS.listModels, safeHandler(async (input = {}) => listModels(
+    await resolvedConfig(input),
+    { query: input?.query },
+  )));
   ipcMain.handle(CHANNELS.generateIdeas, safeHandler(async (input = {}) => {
     const prompt = typeof input?.prompt === "string" ? input.prompt : "";
     const count = input?.count;
     const config = await resolvedConfig(input);
     return generateIdeas(config, prompt, count);
+  }));
+  ipcMain.handle(CHANNELS.draftEvaluation, safeHandler(async (input = {}) => {
+    const config = await resolvedConfig(input);
+    return draftEvaluation(config, {
+      projectContext: input?.projectContext,
+      claimIds: input?.claimIds,
+    });
+  }));
+  ipcMain.handle(CHANNELS.extractEvidence, safeHandler(async (input = {}) => {
+    const config = await resolvedConfig(input);
+    return extractEvidence(config, {
+      sourceText: input?.sourceText,
+      sourceLabel: input?.sourceLabel,
+    });
   }));
 }
 

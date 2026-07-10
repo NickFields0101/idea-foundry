@@ -43,6 +43,7 @@ next-env.d.ts
 /.npm-cache/
 /build/*
 !/build/sites-vite-plugin.ts
+!/build/icon.png
 *.tsbuildinfo
 /.sites-push.mjs
 /desktop-dist/

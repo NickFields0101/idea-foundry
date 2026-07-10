@@ -26,7 +26,7 @@ Artifacts are copied into `release/`:
 - `Idea-Foundry-<version>-macOS-x64.dmg`
 - `Idea-Foundry-<version>-macOS-x64.zip`
 
-DMG creation depends on Apple tooling and must run on macOS. From Windows or Linux, dispatch the **Desktop release** GitHub Actions workflow instead. A tag such as `v0.3.0` must match `package.json`; tag builds publish the Windows and macOS packages to the corresponding GitHub Release. A manual workflow run builds downloadable Actions artifacts without publishing a release.
+DMG creation depends on Apple tooling and must run on macOS. From Windows or Linux, dispatch the **Desktop release** GitHub Actions workflow instead. A tag such as `v0.4.0` must match `package.json`; tag builds publish the Windows and macOS packages to the corresponding GitHub Release. A manual workflow run builds downloadable Actions artifacts without publishing a release.
 
 ## Signing and notarization
 
