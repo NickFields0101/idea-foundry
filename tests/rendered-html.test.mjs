@@ -41,6 +41,8 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
   assert.match(page, /Profile boundary/);
   assert.match(page, /The LLM proposes hypotheses\. This app remains the only calculator\./);
+  assert.match(page, /OpenRouter/);
+  assert.match(page, /Paste your OpenRouter API key/);
   assert.match(page, /scoreReview\(state\.review\)/);
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);

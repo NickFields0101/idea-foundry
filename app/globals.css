@@ -316,7 +316,7 @@ input[type="range"] { accent-color: var(--green); }
 .connector-state { border-radius: 999px; font-family: var(--mono); font-size: 9px; padding: 6px 9px; text-transform: uppercase; }
 .connector-state.ready { background: var(--green-pale); color: var(--green); }
 .connector-state.idle { background: var(--surface-muted); color: var(--ink-soft); }
-.provider-picker { display: grid; gap: 9px; grid-template-columns: repeat(3, 1fr); margin-bottom: 14px; }
+.provider-picker { display: grid; gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 14px; }
 .provider-picker button { background: var(--paper); border: 1px solid var(--line); border-radius: 7px; display: flex; flex-direction: column; min-height: 72px; padding: 13px; text-align: left; }
 .provider-picker button:hover { border-color: var(--green); }
 .provider-picker button.active { background: var(--green-pale); border-color: var(--green); box-shadow: inset 3px 0 0 var(--green); }
@@ -329,12 +329,14 @@ input[type="range"] { accent-color: var(--green); }
 .endpoint-boundary span { color: var(--ink-soft); font-size: 10px; }
 .model-field-grid { display: grid; gap: 13px; grid-template-columns: 1fr 1fr; }
 .model-field-grid .full-field input, .idea-count-field input { background: var(--paper); border: 1px solid var(--line); min-height: 42px; padding: 8px 10px; width: 100%; }
+.model-field-grid .full-field input[readonly] { background: var(--surface-muted); color: var(--ink-soft); cursor: not-allowed; }
 .model-field-grid .full-field small { color: var(--ink-soft); font-size: 9px; }
 .model-key-field { grid-column: 1 / 2; }
 .idea-count-field { display: flex; flex-direction: column; gap: 4px; }
 .idea-count-field > span { color: var(--ink-soft); font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .idea-count-field input { max-width: 110px; }
 .clear-key-field { margin-bottom: 3px; }
+.required-key-note { color: var(--ink-soft); font-size: 9px; margin: 10px 0 3px; }
 .model-actions { border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 17px; }
 .model-actions .button.primary { margin-left: auto; }
 .connector-message { border-left: 3px solid var(--blue); color: var(--ink-soft); font-size: 10px; margin-top: 13px; padding: 8px 11px; }

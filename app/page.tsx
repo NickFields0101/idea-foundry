@@ -73,21 +73,50 @@ interface AppState {
 
 const STORAGE_KEY = "idea-foundry-v1";
 
-const LLM_PROVIDERS: Record<LlmProvider, { label: string; defaultUrl: string; boundary: string }> = {
+const LLM_PROVIDERS: Record<LlmProvider, {
+  label: string;
+  defaultUrl: string;
+  boundary: string;
+  location: string;
+  remote: boolean;
+  keyRequired: boolean;
+  lockedEndpoint: boolean;
+}> = {
   ollama: {
     label: "Ollama",
     defaultUrl: "http://127.0.0.1:11434",
     boundary: "Local by default. Prompts stay on this computer when Ollama is running locally.",
+    location: "Localhost",
+    remote: false,
+    keyRequired: false,
+    lockedEndpoint: false,
   },
   lmstudio: {
     label: "LM Studio",
     defaultUrl: "http://127.0.0.1:1234/v1",
     boundary: "Local by default. Prompts stay on this computer when LM Studio is running locally.",
+    location: "Localhost",
+    remote: false,
+    keyRequired: false,
+    lockedEndpoint: false,
+  },
+  openrouter: {
+    label: "OpenRouter",
+    defaultUrl: "https://openrouter.ai/api/v1",
+    boundary: "Cloud endpoint. The displayed prompt is sent to OpenRouter and the selected model provider. An OpenRouter API key is required.",
+    location: "Cloud · API key",
+    remote: true,
+    keyRequired: true,
+    lockedEndpoint: true,
   },
   openaiCompatible: {
     label: "OpenAI-compatible",
     defaultUrl: "https://api.openai.com/v1",
     boundary: "May be local or cloud. Prompts leave this computer whenever the endpoint is remote.",
+    location: "Local or cloud",
+    remote: true,
+    keyRequired: false,
+    lockedEndpoint: false,
   },
 };
 
@@ -339,7 +368,7 @@ function validateGeneratedIdea(
 function normalizeLlmConfig(value: unknown): LlmConfig {
   const record = recordValue(value);
   const provider =
-    record?.provider === "ollama" || record?.provider === "lmstudio" || record?.provider === "openaiCompatible"
+    record?.provider === "ollama" || record?.provider === "lmstudio" || record?.provider === "openrouter" || record?.provider === "openaiCompatible"
       ? record.provider
       : DEFAULT_LLM_CONFIG.provider;
   return {
@@ -384,6 +413,9 @@ export default function Home() {
     relationshipOrConflict: "None",
   });
   const desktopAvailable = typeof window === "undefined" ? null : window.ideaFoundry?.desktop === true;
+  const selectedLlmProvider = LLM_PROVIDERS[llmConfig.provider];
+  const llmHasUsableApiKey = Boolean(llmApiKey.trim() || (llmConfig.hasApiKey && !clearLlmApiKey));
+  const llmReady = Boolean(llmConfig.model.trim() && (!selectedLlmProvider.keyRequired || llmHasUsableApiKey));
 
   useEffect(() => {
     const bridge = window.ideaFoundry;
@@ -628,19 +660,26 @@ export default function Home() {
       setSection("model");
       return;
     }
+    if (selectedLlmProvider.keyRequired && !llmHasUsableApiKey) {
+      setLlmMessage("Enter an OpenRouter API key before generating ideas.");
+      setLlmMessageTone("error");
+      setSection("model");
+      return;
+    }
 
     setGeneratingIdeas(true);
     try {
-      await bridge.llm.saveConfig(currentLlmInput());
+      const saved = normalizeLlmConfig(await bridge.llm.saveConfig(currentLlmInput()));
+      setLlmConfig(saved);
       setLlmApiKey("");
       setClearLlmApiKey(false);
       const generationPrompt = prompt.replace("Generate 8 diverse candidates", `Generate ${ideaCount} diverse candidates`);
       const result = await bridge.llm.generateIdeas({
         prompt: generationPrompt,
         count: ideaCount,
-        provider: llmConfig.provider,
-        baseUrl: llmConfig.baseUrl,
-        model: llmConfig.model,
+        provider: saved.provider,
+        baseUrl: saved.baseUrl,
+        model: saved.model,
       });
       const generatedAt = new Date().toISOString();
       const candidates = result.ideas
@@ -838,7 +877,7 @@ export default function Home() {
     { id: "overview", label: "Overview" },
     { id: "ideas", label: "Ideas", meta: String(state.ideas.length) },
     { id: "profile", label: "Profile", meta: state.profile.mode === "private" ? (profileErrors.length ? "!" : "P") : "N" },
-    { id: "model", label: "LLM", meta: desktopAvailable && llmConfig.model ? "✓" : "—" },
+    { id: "model", label: "LLM", meta: desktopAvailable && llmReady ? "✓" : "—" },
     { id: "review", label: "Review", meta: `${score.assessedClaims}/${score.totalClaims}` },
     { id: "evidence", label: "Evidence", meta: String(state.review.artifacts.length) },
     { id: "results", label: "Results", meta: score.numericEligible && score.gateEligible ? "✓" : "!" },
@@ -907,8 +946,8 @@ export default function Home() {
               <button className="button ghost" onClick={() => copyText(prompt, "LLM prompt copied")}>Copy generation prompt</button>
             </div>
             <div className="generation-status">
-              <span className={desktopAvailable && llmConfig.model ? "connected" : "disconnected"} aria-hidden="true" />
-              <strong>{desktopAvailable && llmConfig.model ? `${LLM_PROVIDERS[llmConfig.provider].label} · ${llmConfig.model}` : "No local model selected"}</strong>
+              <span className={desktopAvailable && llmReady ? "connected" : "disconnected"} aria-hidden="true" />
+              <strong>{desktopAvailable && llmReady ? `${LLM_PROVIDERS[llmConfig.provider].label} · ${llmConfig.model}` : "No model selected"}</strong>
               <button className="text-button" onClick={() => setSection("model")}>Connector settings →</button>
               {lastGeneration && <small>Last slate: {lastGeneration.count} ideas from {lastGeneration.model}</small>}
             </div>
@@ -964,13 +1003,13 @@ export default function Home() {
 
         {section === "model" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="Optional local intelligence" title="Connect a model without surrendering the calculator." description="Your model may propose hypotheses. Only confirmed human inputs enter the deterministic evidence review." />
+            <PageHeading eyebrow="Optional model intelligence" title="Connect a model without surrendering the calculator." description="Your model may propose hypotheses. Only confirmed human inputs enter the deterministic evidence review." />
             {desktopAvailable === false ? (
               <section className="desktop-required-card">
-                <span className="desktop-required-mark">LOCAL</span>
+                <span className="desktop-required-mark">DESKTOP</span>
                 <div>
                   <h2>The connector runs in the desktop edition</h2>
-                  <p>This web edition can still copy prompts for any LLM. The desktop app adds private localhost connections and operating-system-protected credentials without requiring a ChatGPT account.</p>
+                  <p>This web edition can still copy prompts for any LLM. The desktop app adds private localhost connections plus optional cloud providers such as OpenRouter, with operating-system-protected credentials and no ChatGPT account requirement.</p>
                 </div>
               </section>
             ) : (
@@ -984,7 +1023,7 @@ export default function Home() {
                 <section className="form-card model-config-card">
                   <div className="form-card-head">
                     <div><h3>Model endpoint</h3><p>{desktopVersion ? `Desktop ${desktopVersion} · ` : ""}Stored only on this computer</p></div>
-                    <span className={`connector-state ${llmConfig.model ? "ready" : "idle"}`}>{llmConfig.model ? "Configured" : "Not configured"}</span>
+                    <span className={`connector-state ${llmReady ? "ready" : "idle"}`}>{llmReady ? "Configured" : "Not configured"}</span>
                   </div>
                   <div className="provider-picker" role="group" aria-label="LLM provider">
                     {(Object.keys(LLM_PROVIDERS) as LlmProvider[]).map((provider) => (
@@ -992,24 +1031,26 @@ export default function Home() {
                         key={provider}
                         className={llmConfig.provider === provider ? "active" : ""}
                         onClick={() => {
-                          setLlmConfig((current) => ({ ...current, provider, baseUrl: LLM_PROVIDERS[provider].defaultUrl, model: "" }));
+                          setLlmConfig({ provider, baseUrl: LLM_PROVIDERS[provider].defaultUrl, model: "", hasApiKey: false });
+                          setLlmApiKey("");
+                          setClearLlmApiKey(false);
                           setLlmModels([]);
                           setLlmMessage("");
                         }}
                       >
                         <strong>{LLM_PROVIDERS[provider].label}</strong>
-                        <span>{provider === "openaiCompatible" ? "Local or cloud" : "Localhost"}</span>
+                        <span>{LLM_PROVIDERS[provider].location}</span>
                       </button>
                     ))}
                   </div>
-                  <div className={`endpoint-boundary ${llmConfig.provider === "openaiCompatible" ? "remote-warning" : "local"}`}>
-                    <strong>{llmConfig.provider === "openaiCompatible" ? "Check the destination" : "Local endpoint"}</strong>
-                    <span>{LLM_PROVIDERS[llmConfig.provider].boundary}</span>
+                  <div className={`endpoint-boundary ${selectedLlmProvider.remote ? "remote-warning" : "local"}`}>
+                    <strong>{selectedLlmProvider.remote ? "Cloud boundary" : "Local endpoint"}</strong>
+                    <span>{selectedLlmProvider.boundary}</span>
                   </div>
                   <div className="model-field-grid">
                     <label className="full-field">
                       <span>Base URL</span>
-                      <input value={llmConfig.baseUrl} spellCheck={false} onChange={(event) => setLlmConfig((current) => ({ ...current, baseUrl: event.target.value }))} />
+                      <input value={llmConfig.baseUrl} spellCheck={false} readOnly={selectedLlmProvider.lockedEndpoint} aria-readonly={selectedLlmProvider.lockedEndpoint} onChange={(event) => setLlmConfig((current) => ({ ...current, baseUrl: event.target.value }))} />
                     </label>
                     <label className="full-field">
                       <span>Model</span>
@@ -1017,18 +1058,20 @@ export default function Home() {
                       <datalist id="available-llm-models">{llmModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</datalist>
                     </label>
                     <label className="full-field model-key-field">
-                      <span>API key {llmConfig.provider === "openaiCompatible" ? "(when required)" : "(optional)"}</span>
-                      <input type="password" autoComplete="off" value={llmApiKey} placeholder={llmConfig.hasApiKey ? "A protected key is already saved" : "Leave blank for local servers without authentication"} onChange={(event) => { setLlmApiKey(event.target.value); setClearLlmApiKey(false); }} />
-                      <small>Never written to project files or browser storage.</small>
+                      <span>API key {selectedLlmProvider.keyRequired ? "(required)" : "(optional)"}</span>
+                      <input type="password" autoComplete="off" required={selectedLlmProvider.keyRequired} aria-required={selectedLlmProvider.keyRequired} value={llmApiKey} placeholder={llmConfig.hasApiKey ? "A protected key is already saved" : selectedLlmProvider.keyRequired ? "Paste your OpenRouter API key" : "Leave blank when the endpoint needs no key"} onChange={(event) => { setLlmApiKey(event.target.value); setClearLlmApiKey(false); }} />
+                      <small>{llmConfig.provider === "openrouter" ? "Stored with operating-system encryption; never written to projects, exports, or browser storage." : "Never written to project files or browser storage."}</small>
                     </label>
                     <label className="idea-count-field">
                       <span>Ideas per slate</span>
                       <input type="number" min="1" max="12" value={ideaCount} onChange={(event) => setIdeaCount(Math.max(1, Math.min(12, Number(event.target.value) || 1)))} />
                     </label>
                   </div>
-                  {llmConfig.hasApiKey && (
+                  {llmConfig.hasApiKey && (selectedLlmProvider.keyRequired ? (
+                    <p className="required-key-note">To remove this required key, choose another provider and save it. Paste a new key above to replace it.</p>
+                  ) : (
                     <label className="check-field clear-key-field"><input type="checkbox" checked={clearLlmApiKey} onChange={(event) => setClearLlmApiKey(event.target.checked)} /><span>Remove the saved API key</span></label>
-                  )}
+                  ))}
                   <div className="model-actions">
                     <button className="button secondary" disabled={llmBusy !== null} onClick={refreshLlmModels}>{llmBusy === "models" ? "Reading models…" : "Refresh models"}</button>
                     <button className="button secondary" disabled={llmBusy !== null} onClick={testLlmConnection}>{llmBusy === "testing" ? "Testing…" : "Test connection"}</button>
@@ -1039,7 +1082,7 @@ export default function Home() {
 
                 <section className="model-generation-card">
                   <div><p className="eyebrow">Ready when you are</p><h2>Generate an editable hypothesis slate</h2><p>The current profile and domain boundary will be included. With a remote endpoint, that selected context leaves this computer.</p></div>
-                  <button className="button primary" disabled={generatingIdeas || !llmConfig.model.trim()} onClick={generateWithConnectedLlm}>{generatingIdeas ? "Generating…" : `Generate ${ideaCount} ideas`}</button>
+                  <button className="button primary" disabled={generatingIdeas || !llmReady} onClick={generateWithConnectedLlm}>{generatingIdeas ? "Generating…" : `Generate ${ideaCount} ideas`}</button>
                 </section>
               </>
             )}

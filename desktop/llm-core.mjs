@@ -1,11 +1,13 @@
-const PROVIDERS = new Set(["ollama", "lmstudio", "openaiCompatible"]);
+const PROVIDERS = new Set(["ollama", "lmstudio", "openrouter", "openaiCompatible"]);
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 const MAX_RESPONSE_BYTES = 2_000_000;
 const MAX_PROMPT_CHARS = 60_000;
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export const PROVIDER_DEFAULTS = Object.freeze({
   ollama: "http://127.0.0.1:11434",
   lmstudio: "http://127.0.0.1:1234/v1",
+  openrouter: OPENROUTER_BASE_URL,
   openaiCompatible: "https://api.openai.com/v1",
 });
 
@@ -75,7 +77,17 @@ export function normalizeConfig(input = {}, fallback = {}) {
     throw new ConnectorError("non_local_endpoint", `${provider === "ollama" ? "Ollama" : "LM Studio"} must use localhost. Choose OpenAI-compatible for a remote endpoint.`);
   }
   url.pathname = url.pathname.replace(/\/+$/, "") || "";
-  const apiKey = String(input.apiKey ?? fallback.apiKey ?? "").trim();
+  if (
+    provider === "openrouter" &&
+    (url.protocol !== "https:" || url.hostname !== "openrouter.ai" || url.port || url.pathname !== "/api/v1")
+  ) {
+    throw new ConnectorError("invalid_endpoint", `OpenRouter is locked to ${OPENROUTER_BASE_URL} so its API key cannot be sent elsewhere.`);
+  }
+  const explicitApiKey = String(input.apiKey ?? "").trim();
+  const sameProvider = fallback.provider === undefined || fallback.provider === provider;
+  const apiKey = input.clearApiKey === true
+    ? ""
+    : explicitApiKey || (sameProvider ? String(fallback.apiKey ?? "").trim() : "");
   if (apiKey.length > 4096) throw new ConnectorError("invalid_api_key", "The API key is too long.");
   return {
     provider,
@@ -83,6 +95,13 @@ export function normalizeConfig(input = {}, fallback = {}) {
     model: String(input.model ?? fallback.model ?? "").trim().slice(0, 300),
     apiKey,
   };
+}
+
+export function assertProviderReady(config) {
+  if (config.provider === "openrouter" && !config.apiKey) {
+    throw new ConnectorError("missing_api_key", "Enter an OpenRouter API key before connecting.");
+  }
+  return config;
 }
 
 function endpoint(config, path) {
@@ -94,10 +113,20 @@ function endpoint(config, path) {
 }
 
 function headersFor(config, json = false) {
+  assertProviderReady(config);
   const headers = { Accept: "application/json" };
   if (json) headers["Content-Type"] = "application/json";
   if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  if (config.provider === "openrouter") headers["X-OpenRouter-Title"] = "Idea Foundry";
   return headers;
+}
+
+function endpointErrorMessage(status) {
+  if (status === 401 || status === 403) return `The model endpoint returned HTTP ${status}. Check the API key.`;
+  if (status === 402) return "OpenRouter returned HTTP 402. Add credits or check the key's spending limit.";
+  if (status === 429) return "The model endpoint is rate-limited. Wait briefly and try again.";
+  if (status === 503) return "The model endpoint has no available provider for this request. Try another model or try again later.";
+  return `The model endpoint returned HTTP ${status}.`;
 }
 
 async function responseText(response) {
@@ -132,8 +161,7 @@ async function responseText(response) {
     }
   }
   if (!response.ok) {
-    const suffix = response.status === 401 || response.status === 403 ? " Check the API key." : "";
-    throw new ConnectorError("endpoint_error", `The model endpoint returned HTTP ${response.status}.${suffix}`);
+    throw new ConnectorError("endpoint_error", endpointErrorMessage(response.status));
   }
   return text;
 }

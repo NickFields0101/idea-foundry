@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  assertProviderReady,
   ConnectorError,
   generateIdeas,
   listModels,
@@ -59,7 +60,7 @@ async function resolvedConfig(overrides = {}) {
     model: stored.model,
     apiKey: decryptApiKey(stored),
   };
-  return normalizeConfig(overrides, fallback);
+  return assertProviderReady(normalizeConfig(overrides, fallback));
 }
 
 function publicConfig(config, hasApiKey) {
@@ -81,10 +82,12 @@ async function writeConfig(input = {}) {
   const previous = await readStoredRecord();
   const previousKey = decryptApiKey(previous);
   const config = normalizeConfig(input, { ...previous, apiKey: previousKey });
-  let encryptedApiKey = input.clearApiKey === true ? "" : String(previous.encryptedApiKey ?? "");
+  assertProviderReady(config);
+  const providerChanged = Boolean(previous.provider && previous.provider !== config.provider);
+  let encryptedApiKey = input.clearApiKey === true || providerChanged ? "" : String(previous.encryptedApiKey ?? "");
   if (typeof input.apiKey === "string" && input.apiKey.trim()) {
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new ConnectorError("credential_store", "This operating system cannot securely store an API key. Use a local model without a key.");
+      throw new ConnectorError("credential_store", "This operating system cannot securely store an API key. Choose a keyless local model or enable operating-system credential protection.");
     }
     encryptedApiKey = safeStorage.encryptString(input.apiKey.trim()).toString("base64");
   }

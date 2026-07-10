@@ -36,3 +36,19 @@ test("AI generation cannot write deterministic review inputs", async () => {
   assert.match(generationFunction, /ideas:\s*\[\.\.\.current\.ideas, \.\.\.candidates\]/);
   assert.doesNotMatch(generationFunction, /updateReview|updateClaim|updateGate|artifacts|gates|claims/);
 });
+
+test("OpenRouter keys stay encrypted, provider-bound, and pinned to OpenRouter", async () => {
+  const [core, main, page] = await Promise.all([
+    readFile(new URL("../desktop/llm-core.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../desktop/main.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(core, /openrouter:\s*OPENROUTER_BASE_URL/);
+  assert.match(core, /url\.hostname !== "openrouter\.ai"/);
+  assert.match(core, /fallback\.provider === undefined \|\| fallback\.provider === provider/);
+  assert.match(core, /Enter an OpenRouter API key before connecting/);
+  assert.match(main, /providerChanged[^]*encryptedApiKey/);
+  assert.match(page, /keyRequired:\s*true/);
+  assert.match(page, /never written to projects, exports, or browser storage/);
+  assert.doesNotMatch(page, /sk-or-v1-[A-Za-z0-9]/);
+});

@@ -1,4 +1,4 @@
-export type LlmProvider = "ollama" | "lmstudio" | "openaiCompatible";
+export type LlmProvider = "ollama" | "lmstudio" | "openrouter" | "openaiCompatible";
 
 export interface LlmConfig {
   provider: LlmProvider;

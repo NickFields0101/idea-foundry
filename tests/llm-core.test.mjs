@@ -51,6 +51,18 @@ test("normalizes endpoints and keeps named local providers on loopback", () => {
   );
   assert.throws(() => normalizeConfig({ provider: "openaiCompatible", baseUrl: "file:///tmp/model" }), /HTTP or HTTPS/);
   assert.throws(() => normalizeConfig({ provider: "unknown", baseUrl: "https://models.example/v1" }), /supported model provider/);
+
+  const openRouter = normalizeConfig({ provider: "openrouter", model: "anthropic/claude-sonnet-4" });
+  assert.equal(openRouter.baseUrl, "https://openrouter.ai/api/v1");
+  assert.throws(
+    () => normalizeConfig({ provider: "openrouter", baseUrl: "https://proxy.example/api/v1" }),
+    /locked to https:\/\/openrouter\.ai\/api\/v1/,
+  );
+  const switchedProvider = normalizeConfig(
+    { provider: "openrouter" },
+    { provider: "openaiCompatible", apiKey: "must-not-cross-providers" },
+  );
+  assert.equal(switchedProvider.apiKey, "");
 });
 
 test("lists Ollama models from the native local endpoint", async () => {
@@ -71,6 +83,27 @@ test("lists OpenAI-compatible models with a bearer credential", async () => {
   );
   assert.equal(authorization, "Bearer secret");
   assert.deepEqual(models, [{ id: "reasoner-small", name: "reasoner-small" }]);
+});
+
+test("lists OpenRouter models through the pinned endpoint with required authentication", async () => {
+  let request = {};
+  const models = await listModels(
+    { provider: "openrouter", apiKey: "openrouter-test-key" },
+    {
+      fetchImpl: async (url, options) => {
+        request = { url: String(url), headers: options.headers };
+        return jsonResponse({ data: [{ id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }] });
+      },
+    },
+  );
+  assert.equal(request.url, "https://openrouter.ai/api/v1/models");
+  assert.equal(request.headers.Authorization, "Bearer openrouter-test-key");
+  assert.equal(request.headers["X-OpenRouter-Title"], "Idea Foundry");
+  assert.deepEqual(models, [{ id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }]);
+  await assert.rejects(
+    listModels({ provider: "openrouter" }, { fetchImpl: async () => jsonResponse({ data: [] }) }),
+    /Enter an OpenRouter API key/,
+  );
 });
 
 test("connection tests do not send project content", async () => {
@@ -116,6 +149,28 @@ test("accepts fenced OpenAI-compatible JSON while keeping it provisional", async
   assert.equal(result.ideas[0].title, "Portable service proof");
 });
 
+test("generates ideas through OpenRouter without exposing its key in output", async () => {
+  let request = {};
+  const result = await generateIdeas(
+    { provider: "openrouter", apiKey: "openrouter-test-key", model: "openai/gpt-4.1-mini" },
+    "Generate one idea.",
+    1,
+    {
+      fetchImpl: async (url, options) => {
+        request = { url: String(url), headers: options.headers, body: JSON.parse(options.body) };
+        return jsonResponse({ choices: [{ message: { content: JSON.stringify({ ideas: [completeIdea()] }) } }] });
+      },
+    },
+  );
+  assert.equal(request.url, "https://openrouter.ai/api/v1/chat/completions");
+  assert.equal(request.headers.Authorization, "Bearer openrouter-test-key");
+  assert.equal(request.body.model, "openai/gpt-4.1-mini");
+  assert.equal(request.body.stream, false);
+  assert.equal(result.provider, "openrouter");
+  assert.equal(result.ideas[0].title, "Portable service proof");
+  assert.doesNotMatch(JSON.stringify(result), /openrouter-test-key/);
+});
+
 test("rejects malformed, incomplete, and oversized model output", async () => {
   const config = { provider: "ollama", baseUrl: "http://localhost:11434", model: "local" };
   await assert.rejects(
@@ -147,5 +202,12 @@ test("sanitizes HTTP and network failures", async () => {
       { fetchImpl: async () => { throw new Error("ECONNREFUSED with local path"); } },
     ),
     /could not be reached/,
+  );
+  await assert.rejects(
+    listModels(
+      { provider: "openrouter", apiKey: "limited-key" },
+      { fetchImpl: async () => jsonResponse({ error: { message: "private billing detail" } }, 402) },
+    ),
+    /Add credits or check the key's spending limit/,
   );
 });
