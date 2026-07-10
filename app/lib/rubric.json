@@ -1,0 +1,614 @@
+[
+    {
+        "categoryId":  "1",
+        "category":  "Problem definition, severity, frequency, and segment",
+        "claimId":  "1A",
+        "atomicClaim":  "Segment, actor, trigger, and current workflow",
+        "weights":  {
+                        "application":  3.6,
+                        "enterprise":  3.3,
+                        "protocolInfrastructure":  2.7,
+                        "marketplaceDepin":  2.4
+                    }
+    },
+    {
+        "categoryId":  "1",
+        "category":  "Problem definition, severity, frequency, and segment",
+        "claimId":  "1B",
+        "atomicClaim":  "Severity, frequency, urgency, and consequence",
+        "weights":  {
+                        "application":  4.8,
+                        "enterprise":  4.4,
+                        "protocolInfrastructure":  3.6,
+                        "marketplaceDepin":  3.2
+                    }
+    },
+    {
+        "categoryId":  "1",
+        "category":  "Problem definition, severity, frequency, and segment",
+        "claimId":  "1C",
+        "atomicClaim":  "Prevalence and representativeness in the target segment",
+        "weights":  {
+                        "application":  3.6,
+                        "enterprise":  3.3,
+                        "protocolInfrastructure":  2.7,
+                        "marketplaceDepin":  2.4
+                    }
+    },
+    {
+        "categoryId":  "2",
+        "category":  "Demand behavior, buyer, budget, and urgency",
+        "claimId":  "2A",
+        "atomicClaim":  "User-buyer-beneficiary alignment and decision authority",
+        "weights":  {
+                        "application":  3.25,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "2",
+        "category":  "Demand behavior, buyer, budget, and urgency",
+        "claimId":  "2B",
+        "atomicClaim":  "Behavioral proof of urgency or commitment",
+        "weights":  {
+                        "application":  3.9,
+                        "enterprise":  3.3,
+                        "protocolInfrastructure":  2.7,
+                        "marketplaceDepin":  3.3
+                    }
+    },
+    {
+        "categoryId":  "2",
+        "category":  "Demand behavior, buyer, budget, and urgency",
+        "claimId":  "2C",
+        "atomicClaim":  "Budget source, willingness to pay, and switching intent",
+        "weights":  {
+                        "application":  3.25,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "2",
+        "category":  "Demand behavior, buyer, budget, and urgency",
+        "claimId":  "2D",
+        "atomicClaim":  "Repeat demand and negative-case evidence",
+        "weights":  {
+                        "application":  2.6,
+                        "enterprise":  2.2,
+                        "protocolInfrastructure":  1.8,
+                        "marketplaceDepin":  2.2
+                    }
+    },
+    {
+        "categoryId":  "3",
+        "category":  "Reachable market, timing, and catalyst",
+        "claimId":  "3A",
+        "atomicClaim":  "Bottom-up reachable wedge",
+        "weights":  {
+                        "application":  3.15,
+                        "enterprise":  2.45,
+                        "protocolInfrastructure":  2.1,
+                        "marketplaceDepin":  2.45
+                    }
+    },
+    {
+        "categoryId":  "3",
+        "category":  "Reachable market, timing, and catalyst",
+        "claimId":  "3B",
+        "atomicClaim":  "Expansion path and scenario range",
+        "weights":  {
+                        "application":  3.15,
+                        "enterprise":  2.45,
+                        "protocolInfrastructure":  2.1,
+                        "marketplaceDepin":  2.45
+                    }
+    },
+    {
+        "categoryId":  "3",
+        "category":  "Reachable market, timing, and catalyst",
+        "claimId":  "3C",
+        "atomicClaim":  "Why-now catalyst and timing risk",
+        "weights":  {
+                        "application":  2.7,
+                        "enterprise":  2.1,
+                        "protocolInfrastructure":  1.8,
+                        "marketplaceDepin":  2.1
+                    }
+    },
+    {
+        "categoryId":  "4",
+        "category":  "Alternatives, quantified outcome advantage, and initial wedge",
+        "claimId":  "4A",
+        "atomicClaim":  "Complete substitute and do-nothing map",
+        "weights":  {
+                        "application":  2.8,
+                        "enterprise":  2.45,
+                        "protocolInfrastructure":  2.45,
+                        "marketplaceDepin":  2.1
+                    }
+    },
+    {
+        "categoryId":  "4",
+        "category":  "Alternatives, quantified outcome advantage, and initial wedge",
+        "claimId":  "4B",
+        "atomicClaim":  "Quantified net outcome advantage after switching costs",
+        "weights":  {
+                        "application":  3.2,
+                        "enterprise":  2.8,
+                        "protocolInfrastructure":  2.8,
+                        "marketplaceDepin":  2.4
+                    }
+    },
+    {
+        "categoryId":  "4",
+        "category":  "Alternatives, quantified outcome advantage, and initial wedge",
+        "claimId":  "4C",
+        "atomicClaim":  "Focused initial wedge and reason to switch now",
+        "weights":  {
+                        "application":  2,
+                        "enterprise":  1.75,
+                        "protocolInfrastructure":  1.75,
+                        "marketplaceDepin":  1.5
+                    }
+    },
+    {
+        "categoryId":  "5",
+        "category":  "Distribution, adoption friction, activation, and retention",
+        "claimId":  "5A",
+        "atomicClaim":  "Reachable and repeatable acquisition channel",
+        "weights":  {
+                        "application":  3.5,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "5",
+        "category":  "Distribution, adoption friction, activation, and retention",
+        "claimId":  "5B",
+        "atomicClaim":  "Workflow, trust, integration, and switching friction",
+        "weights":  {
+                        "application":  3.5,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "5",
+        "category":  "Distribution, adoption friction, activation, and retention",
+        "claimId":  "5C",
+        "atomicClaim":  "Activation event and time to value",
+        "weights":  {
+                        "application":  3.5,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "5",
+        "category":  "Distribution, adoption friction, activation, and retention",
+        "claimId":  "5D",
+        "atomicClaim":  "Retention, expansion, or recurring protocol behavior",
+        "weights":  {
+                        "application":  3.5,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "6",
+        "category":  "Business model, unit economics, capital path, and value capture",
+        "claimId":  "6A",
+        "atomicClaim":  "Pricing or fee model and value capture",
+        "weights":  {
+                        "application":  3,
+                        "enterprise":  3,
+                        "protocolInfrastructure":  2.4,
+                        "marketplaceDepin":  3.3
+                    }
+    },
+    {
+        "categoryId":  "6",
+        "category":  "Business model, unit economics, capital path, and value capture",
+        "claimId":  "6B",
+        "atomicClaim":  "Unit, service, operator, and contribution economics",
+        "weights":  {
+                        "application":  2.5,
+                        "enterprise":  2.5,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "6",
+        "category":  "Business model, unit economics, capital path, and value capture",
+        "claimId":  "6C",
+        "atomicClaim":  "Capital efficiency, financing path, and next milestone",
+        "weights":  {
+                        "application":  2.5,
+                        "enterprise":  2.5,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "6",
+        "category":  "Business model, unit economics, capital path, and value capture",
+        "claimId":  "6D",
+        "atomicClaim":  "Long-run sustainability and equity-token-treasury accrual",
+        "weights":  {
+                        "application":  2,
+                        "enterprise":  2,
+                        "protocolInfrastructure":  1.6,
+                        "marketplaceDepin":  2.2
+                    }
+    },
+    {
+        "categoryId":  "7",
+        "category":  "Technical architecture, feasibility, validation tractability, and operability",
+        "claimId":  "7A",
+        "atomicClaim":  "Workload, state, trust, and architecture coherence",
+        "weights":  {
+                        "application":  2.4,
+                        "enterprise":  3.3,
+                        "protocolInfrastructure":  3.6,
+                        "marketplaceDepin":  2.4
+                    }
+    },
+    {
+        "categoryId":  "7",
+        "category":  "Technical architecture, feasibility, validation tractability, and operability",
+        "claimId":  "7B",
+        "atomicClaim":  "Critical-risk spike or benchmark tractability",
+        "weights":  {
+                        "application":  2,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  3,
+                        "marketplaceDepin":  2
+                    }
+    },
+    {
+        "categoryId":  "7",
+        "category":  "Technical architecture, feasibility, validation tractability, and operability",
+        "claimId":  "7C",
+        "atomicClaim":  "Performance, capacity, observability, and operability",
+        "weights":  {
+                        "application":  2,
+                        "enterprise":  2.75,
+                        "protocolInfrastructure":  3,
+                        "marketplaceDepin":  2
+                    }
+    },
+    {
+        "categoryId":  "7",
+        "category":  "Technical architecture, feasibility, validation tractability, and operability",
+        "claimId":  "7D",
+        "atomicClaim":  "Implementation resources, TCO, migration, and upgrade path",
+        "weights":  {
+                        "application":  1.6,
+                        "enterprise":  2.2,
+                        "protocolInfrastructure":  2.4,
+                        "marketplaceDepin":  1.6
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8A1",
+        "atomicClaim":  "Security invariants and attack surface",
+        "weights":  {
+                        "application":  0.875,
+                        "enterprise":  1.625,
+                        "protocolInfrastructure":  1.25,
+                        "marketplaceDepin":  1
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8A2",
+        "atomicClaim":  "Keys, custody, secrets, and authorization controls",
+        "weights":  {
+                        "application":  0.875,
+                        "enterprise":  1.625,
+                        "protocolInfrastructure":  1.25,
+                        "marketplaceDepin":  1
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8B",
+        "atomicClaim":  "Privacy, data rights, retention, and residency",
+        "weights":  {
+                        "application":  1.4,
+                        "enterprise":  2.6,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  1.6
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8C1",
+        "atomicClaim":  "Reliability, availability, and SLO evidence",
+        "weights":  {
+                        "application":  0.7,
+                        "enterprise":  1.3,
+                        "protocolInfrastructure":  1,
+                        "marketplaceDepin":  0.8
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8C2",
+        "atomicClaim":  "Abuse controls and incident detection/response",
+        "weights":  {
+                        "application":  0.7,
+                        "enterprise":  1.3,
+                        "protocolInfrastructure":  1,
+                        "marketplaceDepin":  0.8
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8D",
+        "atomicClaim":  "Legal, regulatory, and procurement compliance path",
+        "weights":  {
+                        "application":  1.4,
+                        "enterprise":  2.6,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  1.6
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8E1",
+        "atomicClaim":  "Backup, restore, recovery objectives, and tested reconstitution",
+        "weights":  {
+                        "application":  0.525,
+                        "enterprise":  0.975,
+                        "protocolInfrastructure":  0.75,
+                        "marketplaceDepin":  0.6
+                    }
+    },
+    {
+        "categoryId":  "8",
+        "category":  "Security, privacy, reliability, compliance, and recovery",
+        "claimId":  "8E2",
+        "atomicClaim":  "Rollback, shutdown, migration, and user exit",
+        "weights":  {
+                        "application":  0.525,
+                        "enterprise":  0.975,
+                        "protocolInfrastructure":  0.75,
+                        "marketplaceDepin":  0.6
+                    }
+    },
+    {
+        "categoryId":  "9",
+        "category":  "Decentralization necessity and Xahau-Evernode fit",
+        "claimId":  "9A",
+        "atomicClaim":  "Explicit trust or coordination problem removed",
+        "weights":  {
+                        "application":  2.1,
+                        "enterprise":  1.8,
+                        "protocolInfrastructure":  3,
+                        "marketplaceDepin":  2.4
+                    }
+    },
+    {
+        "categoryId":  "9",
+        "category":  "Decentralization necessity and Xahau-Evernode fit",
+        "claimId":  "9B",
+        "atomicClaim":  "Xahau correctly included or omitted against requirements and constraints",
+        "weights":  {
+                        "application":  1.75,
+                        "enterprise":  1.5,
+                        "protocolInfrastructure":  2.5,
+                        "marketplaceDepin":  2
+                    }
+    },
+    {
+        "categoryId":  "9",
+        "category":  "Decentralization necessity and Xahau-Evernode fit",
+        "claimId":  "9C",
+        "atomicClaim":  "Evernode correctly included or omitted against requirements and constraints",
+        "weights":  {
+                        "application":  1.75,
+                        "enterprise":  1.5,
+                        "protocolInfrastructure":  2.5,
+                        "marketplaceDepin":  2
+                    }
+    },
+    {
+        "categoryId":  "9",
+        "category":  "Decentralization necessity and Xahau-Evernode fit",
+        "claimId":  "9D",
+        "atomicClaim":  "Net counterfactual advantage over conventional and protocol alternatives",
+        "weights":  {
+                        "application":  1.4,
+                        "enterprise":  1.2,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  1.6
+                    }
+    },
+    {
+        "categoryId":  "10",
+        "category":  "Ecosystem dependencies, interoperability, and concentration risk",
+        "claimId":  "10A",
+        "atomicClaim":  "Dependency maturity, versioning, and upgrade risk",
+        "weights":  {
+                        "application":  0.75,
+                        "enterprise":  1.5,
+                        "protocolInfrastructure":  1.5,
+                        "marketplaceDepin":  1
+                    }
+    },
+    {
+        "categoryId":  "10",
+        "category":  "Ecosystem dependencies, interoperability, and concentration risk",
+        "claimId":  "10B",
+        "atomicClaim":  "Validator-host-provider-liquidity-capacity concentration",
+        "weights":  {
+                        "application":  0.9,
+                        "enterprise":  1.8,
+                        "protocolInfrastructure":  1.8,
+                        "marketplaceDepin":  1.2
+                    }
+    },
+    {
+        "categoryId":  "10",
+        "category":  "Ecosystem dependencies, interoperability, and concentration risk",
+        "claimId":  "10C",
+        "atomicClaim":  "Interoperability, portability, fallback, and tested exit",
+        "weights":  {
+                        "application":  0.75,
+                        "enterprise":  1.5,
+                        "protocolInfrastructure":  1.5,
+                        "marketplaceDepin":  1
+                    }
+    },
+    {
+        "categoryId":  "10",
+        "category":  "Ecosystem dependencies, interoperability, and concentration risk",
+        "claimId":  "10D",
+        "atomicClaim":  "Licensing, support, governance, and deprecation risk",
+        "weights":  {
+                        "application":  0.6,
+                        "enterprise":  1.2,
+                        "protocolInfrastructure":  1.2,
+                        "marketplaceDepin":  0.8
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11A",
+        "atomicClaim":  "Actor incentives and participation constraints",
+        "weights":  {
+                        "application":  0.75,
+                        "enterprise":  0.75,
+                        "protocolInfrastructure":  2.25,
+                        "marketplaceDepin":  2.75
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11B1",
+        "atomicClaim":  "Sybil and griefing resistance",
+        "weights":  {
+                        "application":  0.3,
+                        "enterprise":  0.3,
+                        "protocolInfrastructure":  0.9,
+                        "marketplaceDepin":  1.1
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11B2",
+        "atomicClaim":  "Collusion and economic/governance capture resistance",
+        "weights":  {
+                        "application":  0.3,
+                        "enterprise":  0.3,
+                        "protocolInfrastructure":  0.9,
+                        "marketplaceDepin":  1.1
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11C",
+        "atomicClaim":  "Token omission or sources-sinks-emissions economics",
+        "weights":  {
+                        "application":  0.6,
+                        "enterprise":  0.6,
+                        "protocolInfrastructure":  1.8,
+                        "marketplaceDepin":  2.2
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11D1",
+        "atomicClaim":  "Routine governance, upgrades, authority, and accountability",
+        "weights":  {
+                        "application":  0.3,
+                        "enterprise":  0.3,
+                        "protocolInfrastructure":  0.9,
+                        "marketplaceDepin":  1.1
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11D2",
+        "atomicClaim":  "Emergency powers, forks, shutdown, and participant exit",
+        "weights":  {
+                        "application":  0.3,
+                        "enterprise":  0.3,
+                        "protocolInfrastructure":  0.9,
+                        "marketplaceDepin":  1.1
+                    }
+    },
+    {
+        "categoryId":  "11",
+        "category":  "Mechanism design, incentives, tokenomics, and governance",
+        "claimId":  "11E",
+        "atomicClaim":  "Bootstrap, subsidy decay, treasury, and equilibrium sustainability",
+        "weights":  {
+                        "application":  0.45,
+                        "enterprise":  0.45,
+                        "protocolInfrastructure":  1.35,
+                        "marketplaceDepin":  1.65
+                    }
+    },
+    {
+        "categoryId":  "12",
+        "category":  "Defensibility, network effects, and compounding advantage",
+        "claimId":  "12A",
+        "atomicClaim":  "Specific compounding advantage mechanism",
+        "weights":  {
+                        "application":  2.4,
+                        "enterprise":  1.6,
+                        "protocolInfrastructure":  2,
+                        "marketplaceDepin":  2.8
+                    }
+    },
+    {
+        "categoryId":  "12",
+        "category":  "Defensibility, network effects, and compounding advantage",
+        "claimId":  "12B",
+        "atomicClaim":  "Retained network, distribution, integration, data, or trust pull",
+        "weights":  {
+                        "application":  2.1,
+                        "enterprise":  1.4,
+                        "protocolInfrastructure":  1.75,
+                        "marketplaceDepin":  2.45
+                    }
+    },
+    {
+        "categoryId":  "12",
+        "category":  "Defensibility, network effects, and compounding advantage",
+        "claimId":  "12C",
+        "atomicClaim":  "Time to copy and durability under competition",
+        "weights":  {
+                        "application":  1.5,
+                        "enterprise":  1,
+                        "protocolInfrastructure":  1.25,
+                        "marketplaceDepin":  1.75
+                    }
+    }
+]

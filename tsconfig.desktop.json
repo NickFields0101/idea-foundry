@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "incremental": false,
+    "plugins": [],
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": [
+    "app/page.tsx",
+    "app/lib/**/*.ts",
+    "app/desktop-bridge.d.ts",
+    "desktop/renderer/**/*.tsx",
+    "vite.desktop.config.ts"
+  ],
+  "exclude": ["node_modules", "dist", "desktop-dist", "release", "db", "worker", "examples"]
+}
