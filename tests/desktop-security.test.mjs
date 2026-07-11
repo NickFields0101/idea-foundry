@@ -37,22 +37,71 @@ test("AI generation cannot write deterministic review inputs", async () => {
   assert.doesNotMatch(generationFunction, /updateReview|updateClaim|updateGate|artifacts|gates|claims/);
 });
 
-test("Quick Run automates preparation but never approval", async () => {
+test("AI one-click Quick Run calculates only an isolated preview", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const quickStart = page.indexOf("async function startQuickRun");
+  const quickEnd = page.indexOf("async function startGuidedQuickRun", quickStart);
+  assert.ok(quickStart >= 0 && quickEnd > quickStart);
+  const quickFunction = page.slice(quickStart, quickEnd);
+  assert.match(quickFunction, /setQuickRunMode\("auto-preview"\)/);
+  assert.match(quickFunction, /const runId = \+\+quickRunRequestRef\.current/);
+  assert.match(quickFunction, /confirmRemoteQuickRunSend/);
+  assert.match(quickFunction, /const selectedBy = selectedAtStart \? "existing-user-choice"[^]*: "automated-priority"/);
+  assert.match(quickFunction, /calculateGenerationPriority\(state\.profile, chosenIdea\.scores\)/);
+  assert.match(quickFunction, /const previewReview = selectedAtStart \? state\.review : freshQuickPreviewReview\(state\.review\)/);
+  assert.match(quickFunction, /buildQuickRunPreview\([^]*scoreReview\)/);
+  assert.match(quickFunction, /setQuickRunOutcome\(\{ preview, idea: chosenIdea \}\)/);
+  assert.match(quickFunction, /setState\(\(current\) => \(\{ \.\.\.current, ideas: \[\.\.\.current\.ideas, \.\.\.candidates\] \}\)\)/);
+  assert.equal((quickFunction.match(/\bsetState\(/g) ?? []).length, 1);
+  assert.doesNotMatch(quickFunction, /applyEvaluationProposals|applyEvidenceProposals|applyGateProposal|updateReview|updateClaim|updateGate|setSelectedEvaluationClaims|reviewerVerified\s*:\s*true/);
+  assert.doesNotMatch(quickFunction, /extractEvidence|artifacts\s*:/);
+  assert.match(page, /Local profile priority selected the idea when needed; AI proposed missing merits and gates;[^<]*locked local formula calculated the preview/);
+  assert.match(page, /No evidence was created, upgraded, or verified\. Your live review[^<]*not changed/);
+  assert.match(page, /Derived from idea route:/);
+  assert.match(page, /Existing route preserved or still unresolved/);
+});
+
+test("Guided Quick Run stages AI suggestions and preserves human approval", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const quickStart = page.indexOf("async function startGuidedQuickRun");
   const quickEnd = page.indexOf("async function saveAiConnectionOrOpenSettings", quickStart);
   assert.ok(quickStart >= 0 && quickEnd > quickStart);
   const quickFunctions = page.slice(quickStart, quickEnd);
+  assert.match(quickFunctions, /setQuickRunMode\("guided"\)/);
   assert.match(quickFunctions, /setQuickRunPhase\("choose-idea"\)/);
   assert.match(quickFunctions, /setSelectedEvaluationClaims\(\[\]\)/);
   assert.match(quickFunctions, /scope: "gates_only"/);
   assert.match(quickFunctions, /confirmRemoteQuickRunSend/);
   assert.match(quickFunctions, /const runId = \+\+quickRunRequestRef\.current/);
-  assert.doesNotMatch(quickFunctions, /applyEvaluationProposals|applyEvidenceProposals|applyGateProposal|reviewerVerified:\s*true/);
+  assert.match(quickFunctions, /Review and explicitly apply only the merit drafts you agree with/);
+  assert.match(quickFunctions, /Apply each gate separately, or leave it unresolved/);
+  assert.doesNotMatch(quickFunctions, /applyEvaluationProposals|applyEvidenceProposals|applyGateProposal|reviewerVerified\s*:\s*true/);
   assert.match(page, /Quick does not mean automatic approval/);
   assert.match(page, /Continue evidence-free/);
   assert.match(page, /Send & refresh gates/);
   assert.match(page, /Cloud model: each AI step confirms before project or evidence context is sent/);
+});
+
+test("Quick Run progress keeps connector geometry separate from accessible labels", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const guideStart = page.indexOf("function QuickRunGuide");
+  const guideEnd = page.indexOf("function Overview", guideStart);
+  assert.ok(guideStart >= 0 && guideEnd > guideStart);
+  const guide = page.slice(guideStart, guideEnd);
+  assert.match(guide, /aria-label="Quick Run progress"/);
+  assert.match(guide, /aria-live="polite"/);
+  assert.match(guide, /aria-current=\{active \? "step" : undefined\}/);
+  assert.match(guide, /className="quick-run-step-marker" aria-hidden="true"/);
+  assert.match(guide, /className="quick-run-step-label"/);
+  assert.match(guide, /className="sr-only"> completed/);
+  assert.match(css, /\.quick-run-guide ol\s*\{[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.quick-run-guide li\s*\{[^}]*grid-template-rows:\s*20px auto/);
+  assert.match(css, /\.quick-run-guide li::after\s*\{[^}]*top:\s*10px[^}]*z-index:\s*0/);
+  assert.match(css, /\.quick-run-step-marker\s*\{[^}]*background:[^}]*z-index:\s*1/);
+  assert.doesNotMatch(css, /\.quick-run-step-label\s*\{[^}]*display:\s*none/);
 });
 
 test("AI review calls create staged UI drafts without mutating review input", async () => {
@@ -74,6 +123,96 @@ test("evaluation context excludes private profile and deterministic scoring data
   const contextBuilder = page.slice(contextStart, contextEnd);
   assert.doesNotMatch(contextBuilder, /profile|generationWeights|weights\[|validatedScore|rawThesisScore|numericEligible/);
   assert.match(contextBuilder, /USER-AUTHORED HYPOTHESIS, NOT PROOF/);
+});
+
+test("raw personality responses are session-only and excluded from projects and exports", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const appStateStart = page.indexOf("interface AppState");
+  const appStateEnd = page.indexOf("const STORAGE_KEY", appStateStart);
+  assert.ok(appStateStart >= 0 && appStateEnd > appStateStart);
+  const appState = page.slice(appStateStart, appStateEnd);
+  assert.doesNotMatch(appState, /personalityAnswers|PERSONALITY_DRAFT_KEY/);
+
+  assert.match(page, /const \[personalityAnswers, setPersonalityAnswers\] = useState<Record<number,\s*IpipNeo120Response>>\(\{\}\)/);
+  assert.match(page, /sessionStorage\.setItem\(PERSONALITY_DRAFT_KEY, JSON\.stringify\(personalityAnswers\)\)/);
+  assert.match(page, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(state\)\)/);
+  assert.doesNotMatch(page, /localStorage\.setItem\([^)]*personalityAnswers/);
+
+  const exportStart = page.indexOf("function exportPacket");
+  const exportEnd = page.indexOf("function exportScorecard", exportStart);
+  assert.ok(exportStart >= 0 && exportEnd > exportStart);
+  const exportPacket = page.slice(exportStart, exportEnd);
+  assert.match(exportPacket, /\.\.\.\(includeProfile \? \{ profile: state\.profile \} : \{\}\)/);
+  assert.doesNotMatch(exportPacket, /personalityAnswers|PERSONALITY_DRAFT_KEY|sessionStorage/);
+
+  const promptStart = page.indexOf("const prompt = useMemo");
+  const promptEnd = page.indexOf("const visibleModels", promptStart);
+  assert.ok(promptStart >= 0 && promptEnd > promptStart);
+  const promptBuilder = page.slice(promptStart, promptEnd);
+  assert.match(promptBuilder, /sharePersonalityScoresWithAi/);
+  assert.match(promptBuilder, /Exact domain and facet scores are intentionally excluded/);
+  assert.doesNotMatch(promptBuilder, /personalityAnswers|PERSONALITY_DRAFT_KEY/);
+
+  const clearStart = page.indexOf("function clearPersonalityDraft");
+  const clearEnd = page.indexOf("function chooseProfileMode", clearStart);
+  assert.match(page.slice(clearStart, clearEnd), /sessionStorage\.removeItem\(PERSONALITY_DRAFT_KEY\)/);
+  const applyStart = page.indexOf("function applyPersonalityAssessment");
+  const applyEnd = page.indexOf("function removePersonalityAssessment", applyStart);
+  assert.match(page.slice(applyStart, applyEnd), /clearPersonalityDraft\(\)/);
+  const projectClearStart = page.indexOf("function clearProjectData");
+  const projectClearEnd = page.indexOf("async function clearAllLocalData", projectClearStart);
+  assert.match(page.slice(projectClearStart, projectClearEnd), /clearPersonalityDraft\(\)/);
+});
+
+test("hydration and import project personality data onto a derived-only schema", async () => {
+  const [page, personality] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/personality.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(personality, /function sanitizePersonalityProfileResult/);
+  assert.match(personality, /Unknown keys \(including any raw responses\)[^]*are discarded/);
+  assert.match(personality, /promptSummary: buildPersonalityPromptSummary/);
+
+  const hydrationStart = page.indexOf("const saved = localStorage.getItem(STORAGE_KEY)");
+  const hydrationEnd = page.indexOf("const saved = sessionStorage.getItem(PERSONALITY_DRAFT_KEY)", hydrationStart);
+  const hydration = page.slice(hydrationStart, hydrationEnd);
+  assert.match(hydration, /sanitizeGenerationProfile\(parsed\.profile, true\)/);
+  assert.match(hydration, /sanitizeReviewInput\(parsed\?\.review\)/);
+  assert.doesNotMatch(hydration, /setState\(\{\s*\.\.\.parsed/);
+
+  const importStart = page.indexOf("function importPacket");
+  const importEnd = page.indexOf("async function copyText", importStart);
+  const imported = page.slice(importStart, importEnd);
+  assert.match(imported, /sanitizeGenerationProfile\(parsed\.profile, false\)/);
+  assert.match(imported, /sanitizeReviewInput\(parsed\?\.review\)/);
+  assert.match(imported, /clearPersonalityDraft\(\)/);
+  assert.doesNotMatch(imported, /profile:\s*parsed\.profile\s*(?:\?\?|,)/);
+});
+
+test("Big Five questionnaire uses complete, accessible native controls", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const assessmentStart = page.indexOf("function PersonalityAssessmentCard");
+  const assessmentEnd = page.indexOf("function WeightEditor", assessmentStart);
+  assert.ok(assessmentStart >= 0 && assessmentEnd > assessmentStart);
+  const assessment = page.slice(assessmentStart, assessmentEnd);
+
+  assert.match(assessment, /<details className="personality-assessment"/);
+  assert.match(assessment, /<summary>/);
+  assert.match(assessment, /<label htmlFor="personality-progress"/);
+  assert.match(assessment, /<progress id="personality-progress" max=\{IPIP_NEO_120_ITEMS\.length\} value=\{answeredCount\}/);
+  assert.match(assessment, /pageItems\.map\(\(item\) => \([^]*<fieldset key=\{item\.id\} className="personality-item">/);
+  assert.match(assessment, /<legend className="sr-only">\{String\(item\.id\)\.padStart\(3, "0"\)\} \{item\.text\}<\/legend>/);
+  assert.match(assessment, /<div className="personality-question-copy" aria-hidden="true"><span>\{String\(item\.id\)\.padStart\(3, "0"\)\}<\/span><strong>\{item\.text\}<\/strong><\/div>/);
+  assert.match(assessment, /type="radio"[^]*name=\{`personality-item-\$\{item\.id\}`\}[^]*checked=\{answers\[item\.id\] === option\.value\}/);
+  assert.match(assessment, /aria-label=\{`\$\{option\.value\}: \$\{option\.label\}`\}/);
+  assert.match(assessment, /disabled=\{answeredCount !== IPIP_NEO_120_ITEMS\.length\}[^>]*>Calculate my profile/);
+  assert.match(assessment, /not population percentiles/);
+  assert.match(assessment, /not diagnosis, hiring, credit, or other consequential decisions/);
+  assert.match(assessment, /Raw answers stay in session storage/);
+  assert.match(assessment, /Include exact domain and facet positions in AI prompts/);
+  assert.match(assessment, /Use this for idea personalization/);
+  assert.match(assessment, />Retake<|Resume retake/);
+  assert.match(assessment, />Delete result</);
 });
 
 test("workspace reset and import purge ephemeral AI source material", async () => {

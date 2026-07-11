@@ -33,6 +33,16 @@ import {
 } from "./lib/scoring";
 import { searchLlmModels } from "./lib/model-search";
 import { applyEvaluationProposals, applyEvidenceProposals, sourceContentSha256 } from "./lib/ai-assistance";
+import { buildQuickRunPreview, type QuickRunPreview } from "./lib/quick-run";
+import {
+  IPIP_NEO_120_ITEMS,
+  IPIP_NEO_120_RESPONSE_OPTIONS,
+  IPIP_NEO_120_SOURCE,
+  sanitizePersonalityProfileResult,
+  scoreIpipNeo120,
+  type IpipNeo120Response,
+  type PersonalityProfileResult,
+} from "./lib/personality";
 import type {
   DraftEvaluationResult,
   EvidenceProposal,
@@ -55,12 +65,15 @@ function brandAssetUrl(filename: string) {
 const BRAND_ICON_URL = brandAssetUrl("idea-foundry-icon.png");
 const BRAND_LOGO_URL = brandAssetUrl("idea-foundry-logo.png");
 const BRAND_MARK_URL = brandAssetUrl("idea-foundry-mark-transparent.png");
+const PERSONALITY_DRAFT_KEY = "idea-foundry-ipip-neo-120-draft-v1";
+const PERSONALITY_ITEMS_PER_PAGE = 10;
 
 type Section = "overview" | "quick" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "export";
 
 type QuickRunPhase =
   | "idle"
   | "generating"
+  | "calculating-preview"
   | "choose-idea"
   | "drafting-evaluation"
   | "approve-evaluation"
@@ -68,6 +81,8 @@ type QuickRunPhase =
   | "refreshing-gates"
   | "approve-gates"
   | "decision";
+
+type QuickRunMode = "auto-preview" | "guided";
 
 interface IdeaCandidate {
   id: string;
@@ -92,6 +107,11 @@ interface ProjectDetails {
   title: string;
   domain: string;
   selectedIdeaId: string;
+}
+
+interface QuickRunOutcomeState {
+  preview: QuickRunPreview;
+  idea: IdeaCandidate;
 }
 
 interface EvaluationDraftState {
@@ -400,12 +420,206 @@ function emptyProfile(mode: "neutral" | "private" = "neutral"): GenerationProfil
       { id: "fit-3", label: "Working-style fit", weight: 25 },
       { id: "fit-4", label: "Learning advantage", weight: 25 },
     ],
+    sharePersonalityScoresWithAi: false,
     generationWeights: {
       personalFit: 35,
       opportunitySignal: 30,
       protocolAffordance: 15,
       experimentability: 20,
     },
+  };
+}
+
+function recordFrom(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function importedString(value: unknown, fallback = "", maxLength = 8_000) {
+  return typeof value === "string" ? value.slice(0, maxLength) : fallback;
+}
+
+function importedStringArray(value: unknown, maxItems = 200) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, maxItems).map((item) => item.slice(0, 240))
+    : [];
+}
+
+function sanitizeWeightedDimensions(
+  input: unknown,
+  fallback: GenerationProfile["searchThemes"],
+  minimum: number,
+  maximum: number,
+  prefix: string,
+) {
+  if (!Array.isArray(input) || input.length < minimum || input.length > maximum) return fallback.map((item) => ({ ...item }));
+  const dimensions = input.map((candidate, index) => {
+    const value = recordFrom(candidate);
+    if (!value || typeof value.label !== "string" || !Number.isInteger(value.weight) || Number(value.weight) < 0) return undefined;
+    const label = value.label.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 120);
+    if (!label) return undefined;
+    return {
+      id: importedString(value.id, `${prefix}-${index + 1}`, 120) || `${prefix}-${index + 1}`,
+      label,
+      weight: Number(value.weight),
+    };
+  });
+  return dimensions.every(Boolean)
+    ? dimensions as GenerationProfile["searchThemes"]
+    : fallback.map((item) => ({ ...item }));
+}
+
+function sanitizeGenerationProfile(input: unknown, preserveExactScoreOptIn: boolean): GenerationProfile {
+  const value = recordFrom(input);
+  const mode = value?.mode === "private" ? "private" : "neutral";
+  const fallback = emptyProfile(mode);
+  if (!value || mode === "neutral") return fallback;
+
+  const weights = recordFrom(value.generationWeights);
+  const generationWeights = weights && ["personalFit", "opportunitySignal", "protocolAffordance", "experimentability"]
+    .every((key) => typeof weights[key] === "number" && Number.isFinite(weights[key]))
+    ? {
+        personalFit: Number(weights.personalFit),
+        opportunitySignal: Number(weights.opportunitySignal),
+        protocolAffordance: Number(weights.protocolAffordance),
+        experimentability: Number(weights.experimentability),
+      }
+    : { ...fallback.generationWeights };
+  const personalityAssessment = sanitizePersonalityProfileResult(value.personalityAssessment);
+  const profile: GenerationProfile = {
+    mode,
+    locked: false,
+    searchThemes: sanitizeWeightedDimensions(value.searchThemes, fallback.searchThemes, 3, 6, "theme-imported"),
+    fitDimensions: sanitizeWeightedDimensions(value.fitDimensions, fallback.fitDimensions, 4, 8, "fit-imported"),
+    generationWeights,
+    ...(personalityAssessment ? { personalityAssessment } : {}),
+    sharePersonalityScoresWithAi: Boolean(
+      preserveExactScoreOptIn
+      && personalityAssessment
+      && value.sharePersonalityScoresWithAi === true,
+    ),
+  };
+  profile.locked = value.locked === true && validateGenerationProfile(profile).length === 0;
+  return profile;
+}
+
+function sanitizeProjectDetails(input: unknown, fallback: ProjectDetails): ProjectDetails {
+  const value = recordFrom(input);
+  return value ? {
+    title: importedString(value.title, fallback.title, 240),
+    domain: importedString(value.domain, fallback.domain, 4_000),
+    selectedIdeaId: importedString(value.selectedIdeaId, fallback.selectedIdeaId, 120),
+  } : { ...fallback };
+}
+
+function sanitizeIdeaCandidates(input: unknown): IdeaCandidate[] {
+  if (!Array.isArray(input)) return [];
+  const routes = new Set<IdeaCandidate["route"]>(["Xahau", "Evernode", "Both", "Neither yet"]);
+  return input.slice(0, 200).flatMap((candidate, index) => {
+    const value = recordFrom(candidate);
+    const scores = recordFrom(value?.scores);
+    if (!value || !scores) return [];
+    const boundedScore = (key: keyof GenerationComponentScores) => Math.max(0, Math.min(100,
+      typeof scores[key] === "number" && Number.isFinite(scores[key]) ? Number(scores[key]) : 0,
+    ));
+    const source = recordFrom(value.source);
+    return [{
+      id: importedString(value.id, `idea-imported-${index + 1}`, 120) || `idea-imported-${index + 1}`,
+      title: importedString(value.title, "Untitled imported idea", 240),
+      concept: importedString(value.concept, "", 8_000),
+      user: importedString(value.user, "", 1_000),
+      buyer: importedString(value.buyer, "", 1_000),
+      currentAlternative: importedString(value.currentAlternative, "", 2_000),
+      criticalAssumption: importedString(value.criticalAssumption, "", 2_000),
+      experiment: importedString(value.experiment, "", 2_000),
+      route: routes.has(value.route as IdeaCandidate["route"]) ? value.route as IdeaCandidate["route"] : "Neither yet",
+      scores: {
+        personalFit: boundedScore("personalFit"),
+        opportunitySignal: boundedScore("opportunitySignal"),
+        protocolAffordance: boundedScore("protocolAffordance"),
+        experimentability: boundedScore("experimentability"),
+      },
+      ...(source?.kind === "llm" ? { source: {
+        kind: "llm" as const,
+        provider: importedString(source.provider, "unknown", 120),
+        model: importedString(source.model, "unknown", 240),
+        generatedAt: importedString(source.generatedAt, "", 80),
+      } } : {}),
+    }];
+  });
+}
+
+function sanitizeReviewInput(input: unknown): ReviewInput | undefined {
+  const value = recordFrom(input);
+  if (!value || !Array.isArray(value.claims) || !Array.isArray(value.artifacts) || !Array.isArray(value.gates)) return undefined;
+  const archetype = ARCHETYPES.includes(value.archetype as Archetype) ? value.archetype as Archetype : "application";
+  const stage = STAGES.includes(value.stage as Stage) ? value.stage as Stage : "thesis";
+  const protocolRoutes: ProtocolRoute[] = ["unresolved", "conventional", "xahau_app_specific", "evernode_baseline", "hybrid"];
+  const gateStatuses: GateAssessment["status"][] = ["pass", "conditional", "fail", "unresolved", "not_due"];
+  const claims = value.claims.slice(0, 200).map((candidate) => {
+    const claim = recordFrom(candidate) ?? {};
+    const merit = claim.merit === null || (typeof claim.merit === "number" && Number.isFinite(claim.merit)) ? claim.merit : null;
+    return {
+      claimId: importedString(claim.claimId, "", 120),
+      merit: merit as number | null,
+      grade: EVIDENCE_GRADES.includes(claim.grade as EvidenceGrade) ? claim.grade as EvidenceGrade : "E0",
+      evidenceClaimIds: importedStringArray(claim.evidenceClaimIds),
+      evidenceArtifactIds: importedStringArray(claim.evidenceArtifactIds),
+      acknowledgedCounterEvidenceIds: importedStringArray(claim.acknowledgedCounterEvidenceIds),
+      ...(typeof claim.note === "string" ? { note: importedString(claim.note, "", 8_000) } : {}),
+    };
+  });
+  const artifacts = value.artifacts.slice(0, 1_000).map((candidate) => {
+    const artifact = recordFrom(candidate) ?? {};
+    const origin = recordFrom(artifact.ingestionOrigin);
+    return {
+      artifactId: importedString(artifact.artifactId, "", 120),
+      evidenceClaimId: importedString(artifact.evidenceClaimId, "", 120),
+      title: importedString(artifact.title, "", 500),
+      rubricClaimIds: importedStringArray(artifact.rubricClaimIds),
+      sourceFamilyId: importedString(artifact.sourceFamilyId, "", 120),
+      observationId: importedString(artifact.observationId, "", 120),
+      duplicateOf: importedString(artifact.duplicateOf, "", 120),
+      reviewerVerified: artifact.reviewerVerified === true,
+      reviewer: importedString(artifact.reviewer, "", 240),
+      relationshipOrConflict: importedString(artifact.relationshipOrConflict, "", 1_000),
+      evidenceType: EVIDENCE_TYPES.includes(artifact.evidenceType as EvidenceType) ? artifact.evidenceType as EvidenceType : "Other",
+      evidenceDate: importedString(artifact.evidenceDate, "", 80),
+      expiryDate: importedString(artifact.expiryDate, "", 80),
+      grade: EVIDENCE_GRADES.includes(artifact.grade as EvidenceGrade) ? artifact.grade as EvidenceGrade : "E0",
+      direction: artifact.direction === "contradicts" ? "contradicts" as const : "supports" as const,
+      ...(typeof artifact.sourceLocation === "string" ? { sourceLocation: importedString(artifact.sourceLocation, "", 2_000) } : {}),
+      ...(typeof artifact.sourceExcerpt === "string" ? { sourceExcerpt: importedString(artifact.sourceExcerpt, "", 8_000) } : {}),
+      ...(typeof artifact.sourceContentSha256 === "string" ? { sourceContentSha256: importedString(artifact.sourceContentSha256, "", 128) } : {}),
+      ...(origin?.kind === "ai-assisted" ? { ingestionOrigin: {
+        kind: "ai-assisted" as const,
+        provider: importedString(origin.provider, "unknown", 120),
+        model: importedString(origin.model, "unknown", 240),
+      } } : {}),
+    };
+  });
+  const gates = value.gates.slice(0, 100).map((candidate) => {
+    const gate = recordFrom(candidate) ?? {};
+    return {
+      id: importedString(gate.id, "", 20) as GateAssessment["id"],
+      status: gateStatuses.includes(gate.status as GateAssessment["status"]) ? gate.status as GateAssessment["status"] : "unresolved",
+      rationale: importedString(gate.rationale, "", 8_000),
+      owner: importedString(gate.owner, "", 500),
+      deadline: importedString(gate.deadline, "", 80),
+      expectedArtifact: importedString(gate.expectedArtifact, "", 2_000),
+      passThreshold: importedString(gate.passThreshold, "", 2_000),
+      killThreshold: importedString(gate.killThreshold, "", 2_000),
+    };
+  });
+  return {
+    archetype,
+    stage,
+    cutoffDate: importedString(value.cutoffDate, today(), 80),
+    protocolRoute: protocolRoutes.includes(value.protocolRoute as ProtocolRoute) ? value.protocolRoute as ProtocolRoute : "unresolved",
+    claims,
+    artifacts,
+    gates,
   };
 }
 
@@ -418,6 +632,15 @@ function defaultReview(): ReviewInput {
     claims: createEmptyClaims(),
     artifacts: [],
     gates: createDefaultGates(),
+  };
+}
+
+function freshQuickPreviewReview(current: ReviewInput): ReviewInput {
+  return {
+    ...defaultReview(),
+    archetype: current.archetype,
+    stage: current.stage,
+    cutoffDate: current.cutoffDate,
   };
 }
 
@@ -643,6 +866,13 @@ export default function Home() {
   const [aiUndo, setAiUndo] = useState<AiUndoState | null>(null);
   const [quickRunPhase, setQuickRunPhase] = useState<QuickRunPhase>("idle");
   const [quickRunMessage, setQuickRunMessage] = useState("");
+  const [quickRunMode, setQuickRunMode] = useState<QuickRunMode | null>(null);
+  const [quickRunOutcome, setQuickRunOutcome] = useState<QuickRunOutcomeState | null>(null);
+  const [personalityAnswers, setPersonalityAnswers] = useState<Record<number, IpipNeo120Response>>({});
+  const [personalityPage, setPersonalityPage] = useState(0);
+  const [personalityTaking, setPersonalityTaking] = useState(false);
+  const [personalityCandidate, setPersonalityCandidate] = useState<PersonalityProfileResult | null>(null);
+  const [personalityDraftHydrated, setPersonalityDraftHydrated] = useState(false);
   const [clearingLocalData, setClearingLocalData] = useState(false);
   const aiAssistRequestRef = useRef(0);
   const generationRequestRef = useRef(0);
@@ -663,6 +893,7 @@ export default function Home() {
   const llmHasUsableApiKey = Boolean(llmApiKey.trim() || llmSavedKeyAvailable);
   const llmReady = Boolean(llmConfig.model.trim() && (!selectedLlmProvider.keyRequired || llmHasUsableApiKey));
   const quickRunBusy = quickRunPhase === "generating"
+    || quickRunPhase === "calculating-preview"
     || quickRunPhase === "drafting-evaluation"
     || quickRunPhase === "refreshing-gates"
     || clearingLocalData;
@@ -707,21 +938,18 @@ export default function Home() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved) as AppState;
-        if (parsed.review?.claims?.length === RUBRIC.length) {
+        const parsed = recordFrom(JSON.parse(saved));
+        const review = sanitizeReviewInput(parsed?.review);
+        if (parsed && review?.claims.length === RUBRIC.length) {
+          const fallback = defaultState();
           // Browser storage is an external system; hydration intentionally happens after mount.
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setState({
-            ...parsed,
-            review: {
-              ...parsed.review,
-              claims: parsed.review.claims.map((claim) => ({
-                ...claim,
-                evidenceClaimIds: claim.evidenceClaimIds ?? [],
-                evidenceArtifactIds: claim.evidenceArtifactIds ?? [],
-                acknowledgedCounterEvidenceIds: claim.acknowledgedCounterEvidenceIds ?? [],
-              })),
-            },
+            started: parsed.started === true,
+            project: sanitizeProjectDetails(parsed.project, fallback.project),
+            profile: sanitizeGenerationProfile(parsed.profile, true),
+            ideas: sanitizeIdeaCandidates(parsed.ideas),
+            review,
           });
         }
       } catch {
@@ -732,8 +960,49 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const saved = sessionStorage.getItem(PERSONALITY_DRAFT_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Record<string, unknown>;
+        const normalized = Object.fromEntries(
+          Object.entries(parsed)
+            .map(([id, response]) => [Number(id), Number(response)] as const)
+            .filter(([id, response]) => Number.isInteger(id)
+              && id >= 1
+              && id <= IPIP_NEO_120_ITEMS.length
+              && Number.isInteger(response)
+              && response >= 1
+              && response <= 5),
+        ) as Record<number, IpipNeo120Response>;
+        const answered = Object.keys(normalized).length;
+        // Session storage is an external system; draft restoration intentionally happens after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setPersonalityAnswers(normalized);
+        if (answered === IPIP_NEO_120_ITEMS.length) {
+          setPersonalityCandidate(scoreIpipNeo120(normalized));
+        } else if (answered > 0) {
+          const firstMissing = IPIP_NEO_120_ITEMS.find((item) => normalized[item.id] === undefined)?.id ?? 1;
+          setPersonalityPage(Math.floor((firstMissing - 1) / PERSONALITY_ITEMS_PER_PAGE));
+        }
+      } catch {
+        sessionStorage.removeItem(PERSONALITY_DRAFT_KEY);
+      }
+    }
+    setPersonalityDraftHydrated(true);
+  }, []);
+
+  useEffect(() => {
     if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [hydrated, state]);
+
+  useEffect(() => {
+    if (!personalityDraftHydrated) return;
+    if (Object.keys(personalityAnswers).length > 0) {
+      sessionStorage.setItem(PERSONALITY_DRAFT_KEY, JSON.stringify(personalityAnswers));
+    } else {
+      sessionStorage.removeItem(PERSONALITY_DRAFT_KEY);
+    }
+  }, [personalityAnswers, personalityDraftHydrated]);
 
   useEffect(() => {
     if (!toast) return;
@@ -815,14 +1084,23 @@ export default function Home() {
   );
 
   const prompt = useMemo(() => {
-    const profileContext =
-      state.profile.mode === "private"
-        ? `PRIVATE SEARCH PROFILE (ranking only; never treat this as market evidence):\nThemes: ${state.profile.searchThemes
-            .map((item) => `${item.label} ${item.weight}%`)
-            .join(", ")}\nFit dimensions: ${state.profile.fitDimensions
-            .map((item) => `${item.label} ${item.weight}%`)
-            .join(", ")}`
-        : "PROFILE MODE: neutral. Do not infer a founder personality or personal preferences.";
+    const assessment = state.profile.personalityAssessment;
+    const personalityContext = assessment
+      ? `\nAssessment-derived work-style preferences: ${assessment.workStyleFit
+          .map((dimension) => `${dimension.label}: ${dimension.orientation}`)
+          .join(", ")}. Use these only to vary founder-fit hypotheses; they are self-report preference signals, not evidence or a diagnosis.${
+          state.profile.sharePersonalityScoresWithAi
+            ? `\nUser explicitly opted to include exact IPIP-NEO-120 response-scale positions: ${assessment.promptSummary}`
+            : " Exact domain and facet scores are intentionally excluded."
+        }`
+      : "";
+    const profileContext = state.profile.mode === "private"
+      ? `PRIVATE SEARCH PROFILE (idea generation and ranking only; never treat this as market evidence):\nThemes: ${state.profile.searchThemes
+          .map((item) => `${item.label} ${item.weight}%`)
+          .join(", ")}\nFit dimensions: ${state.profile.fitDimensions
+          .map((item) => `${item.label} ${item.weight}%`)
+          .join(", ")}${personalityContext}`
+      : "PROFILE MODE: neutral. Do not infer a founder personality or personal preferences.";
     return `You are generating falsifiable startup/protocol hypotheses for Xahau and Evernode.\n\n${profileContext}\n\nDomain boundary: ${state.project.domain || "Open"}\n\nGenerate 8 diverse candidates. For each return: title, user, buyer, triggering situation, current alternative, material consequence, why Xahau/Evernode is necessary, largest reason it may fail, critical assumption, and a 14-day experiment. Separate observed facts from hypotheses. Do not invent interviews, commitments, payments, benchmarks, or protocol facts. Do not calculate a validated score. Finish by assigning 0-100 exploration estimates for opportunity signal, protocol affordance, experimentability, and${
       state.profile.mode === "private" ? " personal fit" : " omit personal fit"
     }. Output compact JSON suitable for manual entry into Idea Foundry.`;
@@ -854,6 +1132,8 @@ export default function Home() {
     setLastGeneration(null);
     setQuickRunPhase("idle");
     setQuickRunMessage("");
+    setQuickRunMode(null);
+    setQuickRunOutcome(null);
     setLlmApiKey("");
     setClearLlmApiKey(false);
     setMobileMoreOpen(false);
@@ -901,8 +1181,71 @@ export default function Home() {
     }
   }
 
+  function clearPersonalityDraft() {
+    sessionStorage.removeItem(PERSONALITY_DRAFT_KEY);
+    setPersonalityAnswers({});
+    setPersonalityPage(0);
+    setPersonalityTaking(false);
+    setPersonalityCandidate(null);
+  }
+
+  function chooseProfileMode(mode: GenerationProfile["mode"]) {
+    if (state.profile.mode === mode) return;
+    if (mode === "neutral") clearPersonalityDraft();
+    setState((current) => ({ ...current, profile: emptyProfile(mode) }));
+  }
+
+  function startPersonalityAssessment(reset = false) {
+    if (reset) {
+      setPersonalityAnswers({});
+      setPersonalityCandidate(null);
+      setPersonalityPage(0);
+      sessionStorage.removeItem(PERSONALITY_DRAFT_KEY);
+    }
+    setPersonalityTaking(true);
+  }
+
+  function finishPersonalityAssessment() {
+    if (Object.keys(personalityAnswers).length !== IPIP_NEO_120_ITEMS.length) {
+      setToast("Answer all 120 statements before calculating the profile");
+      return;
+    }
+    try {
+      setPersonalityCandidate(scoreIpipNeo120(personalityAnswers));
+      setPersonalityTaking(false);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The personality profile could not be calculated");
+    }
+  }
+
+  function applyPersonalityAssessment(result: PersonalityProfileResult) {
+    setState((current) => ({
+      ...current,
+      profile: {
+        ...current.profile,
+        personalityAssessment: result,
+        sharePersonalityScoresWithAi: false,
+        locked: false,
+      },
+    }));
+    clearPersonalityDraft();
+    setToast("Personality profile applied locally");
+  }
+
+  function removePersonalityAssessment() {
+    clearPersonalityDraft();
+    setState((current) => {
+      const { personalityAssessment: _assessment, sharePersonalityScoresWithAi: _share, ...profile } = current.profile;
+      void _assessment;
+      void _share;
+      return { ...current, profile: { ...profile, sharePersonalityScoresWithAi: false, locked: false } };
+    });
+    setToast("Personality profile removed");
+  }
+
   function clearProjectData() {
     localStorage.removeItem(STORAGE_KEY);
+    clearPersonalityDraft();
     resetAiWorkspace();
     setImportText("");
     setIncludeProfile(false);
@@ -932,6 +1275,7 @@ export default function Home() {
       setLlmBusy(null);
       setQuickRunPhase("idle");
       setQuickRunMessage("");
+      setQuickRunMode(null);
       if (bridge?.desktop) await bridge.llm.clearConfig();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "The saved AI connection could not be cleared.");
@@ -1215,9 +1559,126 @@ export default function Home() {
 
   async function startQuickRun() {
     if (clearingLocalDataRef.current) return;
+    setQuickRunMode("auto-preview");
+    setQuickRunOutcome(null);
     if (desktopAvailable !== true || !llmReady) {
       setQuickRunPhase("idle");
-      setLlmMessage("Connect a model, then return Home and start Quick Run.");
+      setQuickRunMode(null);
+      setLlmMessage("Connect a model, then return Home and start AI Quick Run.");
+      setLlmMessageTone("neutral");
+      setSection("model");
+      return;
+    }
+
+    const runId = ++quickRunRequestRef.current;
+    const selectedAtStart = selectedIdea;
+    const needsGeneration = !selectedAtStart && state.ideas.length === 0;
+    setQuickRunPhase("generating");
+    setQuickRunMessage(needsGeneration
+      ? "AI is creating four hypotheses, then the local profile-priority formula will select one."
+      : "Idea Foundry is selecting the strongest saved exploration match for a provisional preview.");
+    setSection("quick");
+
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || runId !== quickRunRequestRef.current) {
+        if (runId === quickRunRequestRef.current) {
+          setQuickRunPhase("idle");
+          setQuickRunMode(null);
+        }
+        return;
+      }
+      const remoteDescription = selectedAtStart
+        ? "your selected idea, current review notes, and up to 12 approved evidence excerpts for an AI-input preview"
+        : needsGeneration
+          ? `${state.profile.mode === "private" ? "your private generation profile, " : ""}project boundary, generated hypotheses, and a fresh evidence-free review context for an AI-input preview`
+          : "the automatically selected idea and a fresh evidence-free review context for an AI-input preview";
+      if (!confirmRemoteQuickRunSend(connection.saved, remoteDescription)) {
+        setQuickRunPhase("idle");
+        setQuickRunMode(null);
+        setQuickRunMessage("");
+        setSection("overview");
+        return;
+      }
+
+      let candidates = [...state.ideas];
+      if (needsGeneration) {
+        const generationPrompt = prompt.replace("Generate 8 diverse candidates", "Generate 4 diverse candidates");
+        const result = await connection.bridge.llm.generateIdeas({
+          prompt: generationPrompt,
+          count: 4,
+          provider: connection.saved.provider,
+          baseUrl: connection.saved.baseUrl,
+          model: connection.saved.model,
+        });
+        if (runId !== quickRunRequestRef.current) return;
+        candidates = generatedCandidatesFromResult(result, state.profile.mode === "private");
+        if (candidates.length === 0) throw new Error("The model returned no ideas that passed the local schema.");
+        setState((current) => ({ ...current, ideas: [...current.ideas, ...candidates] }));
+        setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
+      }
+
+      const chosenIdea = selectedAtStart ?? [...candidates].sort(
+        (left, right) => calculateGenerationPriority(state.profile, right.scores)
+          - calculateGenerationPriority(state.profile, left.scores),
+      )[0];
+      if (!chosenIdea) throw new Error("Quick Run could not find an idea to preview.");
+      const selectedBy = selectedAtStart ? "existing-user-choice" as const : "automated-priority" as const;
+      const previewReview = selectedAtStart ? state.review : freshQuickPreviewReview(state.review);
+      const projectSnapshot = { ...state.project, title: chosenIdea.title, selectedIdeaId: chosenIdea.id };
+      const snapshot = evaluationFingerprintFor(
+        chosenIdea,
+        projectSnapshot,
+        previewReview,
+        selectedAtStart ? evaluationNotes : "",
+      );
+      const claimIds = previewReview.claims.filter((claim) => claim.merit === null).map((claim) => claim.claimId);
+
+      setQuickRunPhase("calculating-preview");
+      setQuickRunMessage("One hypothesis is selected. AI is proposing missing review inputs, then the locked local formula will calculate the preview.");
+      const draft = await connection.bridge.llm.draftEvaluation({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: snapshot.context,
+        claimIds: claimIds.length ? claimIds : [],
+        scope: claimIds.length ? "claims_and_gates" : "gates_only",
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      const preview = buildQuickRunPreview({
+        baseReview: previewReview,
+        draft,
+        selectedIdeaId: chosenIdea.id,
+        selectedBy,
+        selectionPriority: calculateGenerationPriority(state.profile, chosenIdea.scores),
+        ideaRoute: chosenIdea.route,
+        sourceInputFingerprint: snapshot.fingerprint,
+        createdAt: new Date().toISOString(),
+      }, scoreReview);
+      setQuickRunOutcome({ preview, idea: chosenIdea });
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setQuickRunMessage("");
+      setSection("results");
+    } catch (error) {
+      if (runId !== quickRunRequestRef.current) return;
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setQuickRunOutcome(null);
+      setLlmMessage(error instanceof Error ? error.message : "AI Quick Run could not calculate a preview.");
+      setLlmMessageTone("error");
+      setSection("model");
+    }
+  }
+
+  async function startGuidedQuickRun() {
+    if (clearingLocalDataRef.current) return;
+    setQuickRunMode("guided");
+    setQuickRunOutcome(null);
+    if (desktopAvailable !== true || !llmReady) {
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setLlmMessage("Connect a model, then return Home and start Guided Quick Run.");
       setLlmMessageTone("neutral");
       setSection("model");
       return;
@@ -1242,7 +1703,10 @@ export default function Home() {
     try {
       const connection = await saveAiConnectionOrOpenSettings();
       if (!connection || runId !== quickRunRequestRef.current) {
-        if (runId === quickRunRequestRef.current) setQuickRunPhase("idle");
+        if (runId === quickRunRequestRef.current) {
+          setQuickRunPhase("idle");
+          setQuickRunMode(null);
+        }
         return;
       }
       if (!confirmRemoteQuickRunSend(
@@ -1252,6 +1716,7 @@ export default function Home() {
           : "your project boundary and the generation prompt",
       )) {
         setQuickRunPhase("idle");
+        setQuickRunMode(null);
         setQuickRunMessage("");
         setSection("overview");
         return;
@@ -1275,6 +1740,7 @@ export default function Home() {
     } catch (error) {
       if (runId !== quickRunRequestRef.current) return;
       setQuickRunPhase("idle");
+      setQuickRunMode(null);
       setLlmMessage(error instanceof Error ? error.message : "Quick Run could not generate an idea slate.");
       setLlmMessageTone("error");
       setSection("model");
@@ -1422,7 +1888,19 @@ export default function Home() {
     quickRunRequestRef.current += 1;
     setQuickRunPhase("idle");
     setQuickRunMessage("");
+    setQuickRunMode(null);
     if (section === "quick") setSection("overview");
+  }
+
+  function inspectQuickRunOutcome() {
+    if (!quickRunOutcome) return;
+    if (quickRunOutcome.preview.selectedBy === "existing-user-choice") {
+      setSection("review");
+      setToast("Opened the live review; the AI preview remains separate");
+      return;
+    }
+    setSection("ideas");
+    setToast("Review the automatically prioritized idea before choosing it for the live evaluation");
   }
 
   async function saveAiConnectionOrOpenSettings() {
@@ -1804,16 +2282,18 @@ export default function Home() {
 
   function importPacket() {
     try {
-      const parsed = JSON.parse(importText) as Partial<AppState> & { review?: ReviewInput; profile?: GenerationProfile };
-      if (!parsed.review || !Array.isArray(parsed.review.claims)) throw new Error("Missing review");
+      const parsed = recordFrom(JSON.parse(importText));
+      const review = sanitizeReviewInput(parsed?.review);
+      if (!parsed || !review || review.claims.length !== RUBRIC.length) throw new Error("Missing review");
       resetAiWorkspace();
+      clearPersonalityDraft();
       setState((current) => ({
         ...current,
         started: true,
-        project: parsed.project ?? current.project,
-        ideas: parsed.ideas ?? current.ideas,
-        review: parsed.review as ReviewInput,
-        profile: parsed.profile ?? current.profile,
+        project: sanitizeProjectDetails(parsed.project, current.project),
+        ideas: parsed.ideas === undefined ? current.ideas : sanitizeIdeaCandidates(parsed.ideas),
+        review,
+        profile: parsed.profile === undefined ? current.profile : sanitizeGenerationProfile(parsed.profile, false),
       }));
       setSection("results");
       setImportText("");
@@ -1842,7 +2322,7 @@ export default function Home() {
             <p className="hero-lede">Turn a blank page into useful ideas, choose one, and see what real evidence actually supports.</p>
             <div className="hero-actions">
               <button className="button primary" onClick={() => start("neutral")}>Start a project <span aria-hidden="true">→</span></button>
-              <button className="button secondary" onClick={startQuickFromWelcome}>Quick Run</button>
+              <button className="button secondary" onClick={startQuickFromWelcome}>AI Quick Run</button>
               <button className="button secondary" onClick={() => start("private")}>Personalize my ideas</button>
               <button className="button ghost" onClick={startWithIdea}>I already have an idea</button>
             </div>
@@ -1935,7 +2415,7 @@ export default function Home() {
       </aside>
 
       <section className="workspace">
-        {quickRunPhase !== "idle" && section !== "quick" && (
+        {quickRunPhase !== "idle" && quickRunMode === "guided" && section !== "quick" && (
           <QuickRunGuide
             phase={quickRunPhase}
             message={quickRunMessage}
@@ -1954,6 +2434,7 @@ export default function Home() {
             llmReady={llmReady}
             quickRunBusy={quickRunBusy}
             onQuickRun={() => void startQuickRun()}
+            onGuidedQuickRun={() => void startGuidedQuickRun()}
             onNavigate={setSection}
             onUpdateProject={(patch) => setState((current) => ({ ...current, project: { ...current.project, ...patch } }))}
           />
@@ -1961,13 +2442,19 @@ export default function Home() {
 
         {section === "quick" && (
           <div className="page-section narrow quick-run-page">
-            <PageHeading eyebrow="Quick Run" title="AI drafts the work. You approve what counts." description="Quick Run automates safe setup and pauses for idea choice, merit approval, real evidence, and every gate decision." />
+            <PageHeading
+              eyebrow={quickRunMode === "auto-preview" ? "AI one-click preview" : "Guided Quick Run"}
+              title={quickRunMode === "auto-preview" ? "One click selects. AI proposes. The formula calculates." : "AI drafts the work. You approve what counts."}
+              description={quickRunMode === "auto-preview"
+                ? "AI selects an exploration match and proposes missing ratings in an isolated copy. Your live review and evidence never change."
+                : "Guided Quick Run automates safe setup and pauses for idea choice, merit approval, real evidence, and every gate decision."}
+            />
             <section className="quick-run-working" aria-live="polite">
               <img src={BRAND_ICON_URL} alt="" aria-hidden="true" />
               <div><span>{quickRunBusy ? "Working" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next checkpoint."}</h2><p>Idea → Evaluation → Evidence → Gates → Decision</p></div>
               {quickRunBusy && <i aria-hidden="true" />}
             </section>
-            <div className="quick-run-boundary"><strong>Quick does not mean automatic approval.</strong><span>No idea, merit rating, evidence record, gate, or final decision is accepted without your action.</span></div>
+            <div className="quick-run-boundary"><strong>{quickRunMode === "auto-preview" ? "A preview is not an official review." : "Quick does not mean automatic approval."}</strong><span>{quickRunMode === "auto-preview" ? "AI inputs exist only in a shadow copy. No evidence is created or verified, and the live deterministic record is untouched." : "No idea, merit rating, evidence record, gate, or final decision is accepted without your action."}</span></div>
             <button className="button secondary" onClick={exitQuickRun}>Exit Quick Run</button>
           </div>
         )}
@@ -1980,7 +2467,7 @@ export default function Home() {
               <div>
                 <p className="eyebrow">Choose a starting point</p>
                 <h2>{desktopAvailable && llmReady ? "Generate a fresh idea slate" : "How would you like to begin?"}</h2>
-                <p>{state.profile.mode === "private" ? "Your private profile shapes idea ranking only. It never changes evidence or the final score." : "Start neutral now. Personalization is optional and never changes the evidence score."}</p>
+                <p>{state.profile.mode === "private" ? "Your private profile shapes idea generation and ranking. It never changes evidence or the final score." : "Start neutral now. Personalization is optional and never changes the evidence score."}</p>
               </div>
               <div className="idea-start-actions">
                 {desktopAvailable && llmReady ? (
@@ -2245,10 +2732,10 @@ export default function Home() {
 
         {section === "profile" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="Personalize ideas" title="Make generated ideas feel more like you." description="Choose the themes and working style you care about. This changes idea ranking only—never evidence or the final decision score." />
+            <PageHeading eyebrow="Personalize ideas" title="Make generated ideas feel more like you." description="Choose the themes and working style you care about. This changes idea generation and ranking only—never evidence or the final decision score." />
             <div className="mode-switch" role="group" aria-label="Profile mode">
-              <button className={state.profile.mode === "neutral" ? "active" : ""} onClick={() => setState((current) => ({ ...current, profile: emptyProfile("neutral") }))}><strong>Keep it neutral</strong><span>Rank ideas without personal preferences</span></button>
-              <button className={state.profile.mode === "private" ? "active" : ""} onClick={() => setState((current) => ({ ...current, profile: emptyProfile("private") }))}><strong>Personalize my ideas</strong><span>Use my interests and working style</span></button>
+              <button className={state.profile.mode === "neutral" ? "active" : ""} onClick={() => chooseProfileMode("neutral")}><strong>Keep it neutral</strong><span>Rank ideas without personal preferences</span></button>
+              <button className={state.profile.mode === "private" ? "active" : ""} onClick={() => chooseProfileMode("private")}><strong>Personalize my ideas</strong><span>Use my interests and working style</span></button>
             </div>
             {state.profile.mode === "neutral" ? (
               <div className="profile-neutral-card">
@@ -2257,6 +2744,28 @@ export default function Home() {
               </div>
             ) : (
               <>
+                <PersonalityAssessmentCard
+                  appliedResult={state.profile.personalityAssessment}
+                  candidateResult={personalityCandidate}
+                  answers={personalityAnswers}
+                  page={personalityPage}
+                  taking={personalityTaking}
+                  shareExactScores={Boolean(state.profile.sharePersonalityScoresWithAi)}
+                  onStart={startPersonalityAssessment}
+                  onPause={() => setPersonalityTaking(false)}
+                  onAnswer={(itemId, response) => {
+                    setPersonalityAnswers((current) => ({ ...current, [itemId]: response }));
+                    setPersonalityCandidate(null);
+                  }}
+                  onPageChange={setPersonalityPage}
+                  onFinish={finishPersonalityAssessment}
+                  onApply={applyPersonalityAssessment}
+                  onRemove={removePersonalityAssessment}
+                  onToggleExactScores={(enabled) => setState((current) => ({
+                    ...current,
+                    profile: { ...current.profile, sharePersonalityScoresWithAi: enabled, locked: false },
+                  }))}
+                />
                 <WeightEditor title="Search themes" subtitle="3–6 themes; weights must total 100" items={state.profile.searchThemes} onChange={(items) => setState((current) => ({ ...current, profile: { ...current.profile, searchThemes: items, locked: false } }))} />
                 <WeightEditor title="Personal-fit dimensions" subtitle="4–8 dimensions; weights must total 100" items={state.profile.fitDimensions} onChange={(items) => setState((current) => ({ ...current, profile: { ...current.profile, fitDimensions: items, locked: false } }))} />
                 <details className="profile-advanced">
@@ -2271,7 +2780,7 @@ export default function Home() {
                   </section>
                 </details>
                 {profileErrors.length > 0 && <IssueList title="Fix before saving" items={profileErrors} tone="warning" />}
-                <div className="profile-lock-row"><span>Only these themes and weights are saved on this computer.</span><button className="button primary" disabled={profileErrors.length > 0} onClick={() => { setState((current) => ({ ...current, profile: { ...current.profile, locked: true } })); setToast("Personalization saved locally"); }}>{state.profile.locked ? "Personalization saved" : "Save personalization"}</button></div>
+                <div className="profile-lock-row"><span>The profile and any applied assessment result stay on this computer. Raw assessment answers are never saved with the project.</span><button className="button primary" disabled={profileErrors.length > 0} onClick={() => { setState((current) => ({ ...current, profile: { ...current.profile, locked: true } })); setToast("Personalization saved locally"); }}>{state.profile.locked ? "Personalization saved" : "Save personalization"}</button></div>
               </>
             )}
           </div>
@@ -2530,8 +3039,9 @@ export default function Home() {
 
         {section === "results" && (
           <div className="page-section results-page">
+            {quickRunOutcome && <QuickRunPreviewPanel outcome={quickRunOutcome} onInspect={inspectQuickRunOutcome} onDismiss={() => setQuickRunOutcome(null)} />}
             <div className={`result-hero ${score.official && score.numericEligible && score.gateEligible ? "eligible" : "blocked"}`}>
-              <div><p className="eyebrow">Stage decision instrument</p><h1>{!score.official ? "Validation incomplete" : score.numericEligible && score.gateEligible ? `Ready for ${stageLabels[state.review.stage]} human decision` : `Blocked at ${stageLabels[state.review.stage]}`}</h1><p>{!score.official ? `${score.validationErrors.length} input checks must be resolved before these totals become official.` : `${score.numericBlockers.length} numeric and ${score.gateBlockers.length} gate blockers remain.`}</p></div>
+              <div><p className="eyebrow">{quickRunOutcome ? "Live deterministic review · separate from AI preview" : "Stage decision instrument"}</p><h1>{!score.official ? "Validation incomplete" : score.numericEligible && score.gateEligible ? `Ready for ${stageLabels[state.review.stage]} human decision` : `Blocked at ${stageLabels[state.review.stage]}`}</h1><p>{!score.official ? `${score.validationErrors.length} input checks must be resolved before these totals become official.` : `${score.numericBlockers.length} numeric and ${score.gateBlockers.length} gate blockers remain.`}</p></div>
               <div className="result-verdict"><span>Numeric + gate status</span><strong>{score.numericEligible && score.gateEligible ? "READY" : "NOT READY"}</strong><small>Not a final investment or launch decision</small></div>
             </div>
             <div className="metric-grid">
@@ -2575,7 +3085,7 @@ export default function Home() {
             <section className="export-card">
               <div className="export-icon">CSV</div><div><h3>Claim scorecard</h3><p>One auditable row per canonical claim with locked weights and calculated contributions.</p></div><button className="button secondary" onClick={exportScorecard}>Download CSV</button>
             </section>
-            <label className="profile-export"><input type="checkbox" checked={includeProfile} onChange={(event) => setIncludeProfile(event.target.checked)} /><span><strong>Include private profile in JSON</strong><small>Off by default. Profile data is not required to reproduce objective scores.</small></span></label>
+            <label className="profile-export"><input type="checkbox" checked={includeProfile} onChange={(event) => setIncludeProfile(event.target.checked)} /><span><strong>Include private profile in JSON</strong><small>Off by default. An applied personality result is included with the profile, but raw questionnaire answers never are. Profile data is not required to reproduce objective scores.</small></span></label>
             <section className="import-card"><div><p className="eyebrow">Import</p><h2>Recalculate an existing packet</h2><p>Client-supplied computed fields are ignored. The current engine recalculates from review inputs.</p></div><textarea rows={8} value={importText} placeholder="Paste Idea Foundry JSON here" onChange={(event) => setImportText(event.target.value)} /><button className="button secondary" disabled={!importText.trim()} onClick={importPacket}>Validate & import</button></section>
           </div>
         )}
@@ -2612,6 +3122,165 @@ function WeightTotal({ value }: { value: number }) {
   return <span className={`weight-total ${value === 100 ? "valid" : "invalid"}`}>{value} / 100</span>;
 }
 
+function PersonalityAssessmentCard({
+  appliedResult,
+  candidateResult,
+  answers,
+  page,
+  taking,
+  shareExactScores,
+  onStart,
+  onPause,
+  onAnswer,
+  onPageChange,
+  onFinish,
+  onApply,
+  onRemove,
+  onToggleExactScores,
+}: {
+  appliedResult?: PersonalityProfileResult;
+  candidateResult: PersonalityProfileResult | null;
+  answers: Record<number, IpipNeo120Response>;
+  page: number;
+  taking: boolean;
+  shareExactScores: boolean;
+  onStart: (reset?: boolean) => void;
+  onPause: () => void;
+  onAnswer: (itemId: number, response: IpipNeo120Response) => void;
+  onPageChange: (page: number) => void;
+  onFinish: () => void;
+  onApply: (result: PersonalityProfileResult) => void;
+  onRemove: () => void;
+  onToggleExactScores: (enabled: boolean) => void;
+}) {
+  const answeredCount = Object.keys(answers).length;
+  const pageCount = Math.ceil(IPIP_NEO_120_ITEMS.length / PERSONALITY_ITEMS_PER_PAGE);
+  const safePage = Math.max(0, Math.min(pageCount - 1, page));
+  const pageItems = IPIP_NEO_120_ITEMS.slice(
+    safePage * PERSONALITY_ITEMS_PER_PAGE,
+    (safePage + 1) * PERSONALITY_ITEMS_PER_PAGE,
+  );
+  const pageComplete = pageItems.every((item) => answers[item.id] !== undefined);
+  const displayedResult = candidateResult ?? appliedResult;
+  const orderedDomains = displayedResult
+    ? ["O", "C", "E", "A", "N"].map((code) => displayedResult.domains.find((domain) => domain.code === code)!)
+    : [];
+
+  return (
+    <details className="personality-assessment" open={taking || Boolean(candidateResult) || undefined}>
+      <summary>
+        <span className="personality-symbol" aria-hidden="true">OCEAN</span>
+        <span><small>Optional research-based profile</small><strong>Big Five personality assessment</strong><em>{appliedResult ? "Result saved locally" : answeredCount > 0 ? `${answeredCount}/120 answered` : "120 statements · about 15–20 minutes"}</em></span>
+        <b>{appliedResult ? "Applied" : "Open"}</b>
+      </summary>
+      <div className="personality-body">
+        {taking ? (
+          <div className="personality-questionnaire">
+            <div className="personality-progress-row">
+              <label htmlFor="personality-progress"><strong>Part {safePage + 1} of {pageCount}</strong><span>{answeredCount} of 120 answered</span></label>
+              <progress id="personality-progress" max={IPIP_NEO_120_ITEMS.length} value={answeredCount}>{answeredCount} of 120</progress>
+            </div>
+            <div className="personality-scale-key" aria-label="Response scale">
+              {IPIP_NEO_120_RESPONSE_OPTIONS.map((option) => <span key={option.value}><b>{option.value}</b><em>{option.label}</em></span>)}
+            </div>
+            <div className="personality-items">
+              {pageItems.map((item) => (
+                <fieldset key={item.id} className="personality-item">
+                  <legend className="sr-only">{String(item.id).padStart(3, "0")} {item.text}</legend>
+                  <div className="personality-question-copy" aria-hidden="true"><span>{String(item.id).padStart(3, "0")}</span><strong>{item.text}</strong></div>
+                  <div className="personality-options">
+                    {IPIP_NEO_120_RESPONSE_OPTIONS.map((option) => (
+                      <label key={option.value} title={option.label}>
+                        <input
+                          type="radio"
+                          name={`personality-item-${item.id}`}
+                          value={option.value}
+                          checked={answers[item.id] === option.value}
+                          aria-label={`${option.value}: ${option.label}`}
+                          onChange={() => onAnswer(item.id, option.value)}
+                        />
+                        <span>{option.value}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+            </div>
+            <div className="personality-question-actions">
+              <button className="text-button" onClick={onPause}>Save for this session & exit</button>
+              <div>
+                <button className="button secondary" disabled={safePage === 0} onClick={() => onPageChange(safePage - 1)}>Back</button>
+                {safePage < pageCount - 1 ? (
+                  <button className="button primary" disabled={!pageComplete} onClick={() => onPageChange(safePage + 1)}>Continue</button>
+                ) : (
+                  <button className="button primary" disabled={answeredCount !== IPIP_NEO_120_ITEMS.length} onClick={onFinish}>Calculate my profile</button>
+                )}
+              </div>
+            </div>
+            {!pageComplete && <p className="personality-page-note" role="status">Answer all 10 statements on this part to continue.</p>}
+          </div>
+        ) : displayedResult ? (
+          <div className="personality-results">
+            <div className="personality-result-intro">
+              <div><p className="eyebrow">{candidateResult ? "Ready to apply" : "Applied profile"}</p><h3>Your Big Five scale positions</h3><p>These are positions on this 1–5 self-report scale, transformed to 0–100. They are <strong>not population percentiles</strong>, diagnoses, or judgments of ability.</p></div>
+              {candidateResult && <button className="button primary" onClick={() => onApply(candidateResult)}>Use this for idea personalization</button>}
+            </div>
+            <div className="personality-domain-results">
+              {orderedDomains.map((domain) => (
+                <div key={domain.code}>
+                  <span><strong>{domain.label}</strong><b>{domain.score}</b></span>
+                  <i aria-hidden="true"><b style={{ width: `${domain.score}%` }} /></i>
+                  <small>{domain.score}/100 response-scale position</small>
+                </div>
+              ))}
+            </div>
+            <div className="personality-work-styles">
+              <h4>How Idea Foundry will use this</h4>
+              <p>These neutral work-style signals help the AI vary founder-fit hypotheses. They never change deterministic review scores or count as market evidence.</p>
+              <div>{displayedResult.workStyleFit.map((dimension) => <span key={dimension.id}><small>{dimension.label}</small><strong>{dimension.orientation}</strong></span>)}</div>
+            </div>
+            <details className="personality-facets">
+              <summary>See all 30 facet scale positions</summary>
+              <div>{displayedResult.facets.map((facet) => <span key={facet.code}><small>{facet.label}</small><strong>{facet.score}</strong></span>)}</div>
+            </details>
+            {!candidateResult && (
+              <label className="personality-share-toggle">
+                <input type="checkbox" checked={shareExactScores} onChange={(event) => onToggleExactScores(event.target.checked)} />
+                <span><strong>Include exact domain and facet positions in AI prompts</strong><small>Off by default. Work-style labels are enough for normal personalization. Turn this on only if you want a connected model—including a cloud provider—to receive the exact derived scores.</small></span>
+              </label>
+            )}
+            <div className="personality-result-actions">
+              <span>{answeredCount > 0 && !candidateResult ? `${answeredCount}/120 answers from a retake remain in this browser session.` : "Raw answers are kept only in this browser session and are deleted when you apply or remove a result."}</span>
+              <div>
+                <button className="button secondary" onClick={() => onStart(candidateResult ? true : answeredCount === 0)}>{answeredCount > 0 && !candidateResult ? "Resume retake" : "Retake"}</button>
+                {!candidateResult && <button className="text-button danger" onClick={onRemove}>Delete result</button>}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="personality-intro">
+            <div className="personality-intro-grid">
+              <div><p className="eyebrow">Why this instrument</p><h3>A real Big Five profile you can use locally</h3><p>Idea Foundry uses Johnson’s public-domain <strong>IPIP-NEO-120</strong>: a peer-reviewed 120-item measure of the five broad domains and 30 facets. The commercial NEO-PI-3 is not embedded because its items and scoring are proprietary.</p></div>
+              <div><span><strong>120</strong>statements</span><span><strong>5 + 30</strong>domains and facets</span><span><strong>15–20</strong>minutes</span></div>
+            </div>
+            <ul>
+              <li>Answer based on how you generally see yourself, not how you wish you were.</li>
+              <li>All statements are required for canonical scoring; some original wording may feel dated.</li>
+              <li>Use it for self-reflection and idea fit—not diagnosis, hiring, credit, or other consequential decisions.</li>
+            </ul>
+            <div className="personality-privacy-note"><strong>Privacy boundary</strong><span>Raw answers stay in session storage so you can resume after changing pages. Only the derived profile is saved locally after you apply it, and exact scores stay out of AI prompts by default.</span></div>
+            <div className="personality-intro-actions">
+              <button className="button primary" onClick={() => onStart(false)}>{answeredCount > 0 ? `Resume at ${answeredCount}/120` : "Start the assessment"}</button>
+              {answeredCount > 0 && <button className="button secondary" onClick={() => onStart(true)}>Restart</button>}
+              <small>{IPIP_NEO_120_SOURCE.author} ({IPIP_NEO_120_SOURCE.year}) · {IPIP_NEO_120_SOURCE.itemLicense} items · DOI {IPIP_NEO_120_SOURCE.doi}</small>
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function WeightEditor({ title, subtitle, items, onChange }: { title: string; subtitle: string; items: GenerationProfile["searchThemes"]; onChange: (items: GenerationProfile["searchThemes"]) => void }) {
   const total = items.reduce((sum, item) => sum + item.weight, 0);
   return (
@@ -2633,6 +3302,57 @@ function IssueList({ title, items, tone }: { title: string; items: string[]; ton
   return <section className={`issue-list ${tone}`}><div><span aria-hidden="true">{tone === "error" ? "×" : tone === "warning" ? "!" : "i"}</span><h3>{title}</h3><small>{items.length}</small></div><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></section>;
 }
 
+function QuickRunPreviewPanel({ outcome, onInspect, onDismiss }: {
+  outcome: QuickRunOutcomeState;
+  onInspect: () => void;
+  onDismiss: () => void;
+}) {
+  const { preview, idea } = outcome;
+  const score = preview.previewScore;
+  const statusLabel = preview.status === "preview_ready" ? "PREVIEW READY"
+    : preview.status === "preview_not_ready" ? "PREVIEW NOT READY"
+      : "PREVIEW INCOMPLETE";
+  const uncertainties = preview.proposals.claims
+    .map((proposal) => proposal.uncertainty.trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .slice(0, 3);
+  const previewRouteLabel: Record<ProtocolRoute, string> = {
+    unresolved: "Unresolved",
+    conventional: "Conventional",
+    xahau_app_specific: "Xahau app-specific",
+    evernode_baseline: "Evernode baseline",
+    hybrid: "Hybrid Xahau + Evernode",
+  };
+  return (
+    <section className={`quick-preview-result ${preview.status}`} aria-labelledby="quick-preview-title">
+      <div className="quick-preview-head">
+        <div><p className="eyebrow">AI one-click outcome</p><h1 id="quick-preview-title">{idea.title}</h1><p>{idea.concept}</p></div>
+        <div className="quick-preview-status"><span>AI-assisted preview</span><strong>{statusLabel}</strong><small>Always provisional</small></div>
+      </div>
+      <div className="quick-preview-explainer"><strong>Local profile priority selected the idea when needed; AI proposed missing merits and gates; the locked local formula calculated the preview.</strong><span>No evidence was created, upgraded, or verified. Your live review below was not changed.</span></div>
+      <div className="quick-preview-grid">
+        <div><span>Selection</span><strong>{preview.selectedBy === "existing-user-choice" ? "Your selected idea" : "Automated exploration match"}</strong><small>Local profile priority {preview.selectionPriority.toFixed(1)} / 100</small></div>
+        <div><span>AI-filled merits</span><strong>{preview.filledClaimIds.length} / {preview.previewReview.claims.length}</strong><small>{preview.missingClaimIds.length} still unknown</small></div>
+        <div><span>AI-filled gates</span><strong>{preview.filledGateIds.length} / {preview.previewReview.gates.length}</strong><small>Shadow copy only</small></div>
+        <div><span>Protocol route</span><strong>{previewRouteLabel[preview.previewReview.protocolRoute]}</strong><small>{preview.protocolRouteFilled ? `Derived from idea route: ${idea.route}` : "Existing route preserved or still unresolved"}</small></div>
+        <div><span>Existing approved evidence</span><strong>{preview.previewReview.artifacts.length}</strong><small>Nothing synthesized</small></div>
+      </div>
+      <div className="quick-preview-metrics">
+        <div><span>Preview raw thesis</span><strong>{score.rawThesisScore.toFixed(1)}</strong></div>
+        <div><span>Evidence-validated preview</span><strong>{score.validatedScore.toFixed(1)}</strong></div>
+        <div><span>Evidence confidence</span><strong>{score.evidenceConfidenceIndex.toFixed(1)}</strong></div>
+        <div><span>Verified coverage</span><strong>{score.verifiedEvidenceCoverage.toFixed(1)}%</strong></div>
+      </div>
+      <div className="quick-preview-notes">
+        <div><strong>Critical assumption</strong><span>{idea.criticalAssumption}</span></div>
+        <div><strong>Suggested next experiment</strong><span>{idea.experiment}</span></div>
+        {uncertainties.length > 0 && <div><strong>AI-reported uncertainty</strong><ul>{uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+      </div>
+      <div className="quick-preview-footer"><span>Model {preview.provider} · {preview.model} · Context {preview.sourceInputFingerprint.slice(0, 12)}…</span><div><button className="button primary" onClick={onInspect}>{preview.selectedBy === "existing-user-choice" ? "Open rigorous review" : "Review the chosen idea"}</button><button className="text-button" onClick={onDismiss}>Dismiss preview</button></div></div>
+    </section>
+  );
+}
+
 function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, onExit }: {
   phase: QuickRunPhase;
   message: string;
@@ -2642,7 +3362,7 @@ function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, o
   onExit: () => void;
 }) {
   const steps = ["Idea", "Evaluation", "Evidence", "Gates", "Decision"];
-  const activeIndex = phase === "generating" || phase === "choose-idea" ? 0
+  const activeIndex = phase === "generating" || phase === "calculating-preview" || phase === "choose-idea" ? 0
     : phase === "drafting-evaluation" || phase === "approve-evaluation" ? 1
       : phase === "evidence" ? 2
         : phase === "refreshing-gates" || phase === "approve-gates" ? 3
@@ -2654,14 +3374,18 @@ function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, o
           : phase === "decision" ? "Open decision" : "";
   return (
     <section className="quick-run-guide" aria-label="Quick Run progress">
-      <div className="quick-run-guide-copy"><span>Quick Run</span><strong>{message}</strong><small>{remoteModel ? "Cloud model: each AI step confirms before project or evidence context is sent." : "Local model: AI context stays on this computer."}</small></div>
-      <ol>{steps.map((step, index) => <li className={index < activeIndex ? "done" : index === activeIndex ? "active" : ""} key={step}><i>{index < activeIndex ? "✓" : index + 1}</i><span>{step}</span></li>)}</ol>
+      <div className="quick-run-guide-copy" role="status" aria-live="polite"><span>Quick Run</span><strong>{message}</strong><small>{remoteModel ? "Cloud model: each AI step confirms before project or evidence context is sent." : "Local model: AI context stays on this computer."}</small></div>
+      <ol>{steps.map((step, index) => {
+        const done = index < activeIndex;
+        const active = index === activeIndex;
+        return <li className={done ? "done" : active ? "active" : ""} aria-current={active ? "step" : undefined} key={step}><span className="quick-run-step-marker" aria-hidden="true">{done ? "✓" : index + 1}</span><span className="quick-run-step-label">{step}{done && <span className="sr-only"> completed</span>}</span></li>;
+      })}</ol>
       <div>{continueLabel && <button className="button small primary" onClick={onContinue}>{continueLabel}</button>}<button className="text-button" onClick={onExit}>Exit</button></div>
     </section>
   );
 }
 
-function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quickRunBusy, onQuickRun, onNavigate, onUpdateProject }: {
+function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quickRunBusy, onQuickRun, onGuidedQuickRun, onNavigate, onUpdateProject }: {
   state: AppState;
   score: ReturnType<typeof scoreReview>;
   selectedIdea?: IdeaCandidate;
@@ -2669,6 +3393,7 @@ function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quic
   llmReady: boolean;
   quickRunBusy: boolean;
   onQuickRun: () => void;
+  onGuidedQuickRun: () => void;
   onNavigate: (section: Section) => void;
   onUpdateProject: (patch: Partial<ProjectDetails>) => void;
 }) {
@@ -2682,8 +3407,8 @@ function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quic
     <div className="page-section overview-page">
       <PageHeading eyebrow="Your project" title="Forge better ideas. Prove what holds." description="Move from a blank page to a clear decision without mixing personal preference, AI suggestions, and real evidence." />
       <section className="quick-run-launch">
-        <div><span className="quick-run-kicker">Optional guided automation</span><h2>Run the whole workflow with fewer clicks</h2><p>Quick Run generates ideas when needed, drafts the evaluation, organizes sources you provide, refreshes gates, and opens the deterministic decision. It pauses whenever only you can honestly approve something.</p><small>Idea → Evaluation → Evidence → Gates → Decision · Cloud models confirm before context is sent</small></div>
-        <div><strong>AI drafts. You approve.</strong><button className="button primary" disabled={quickRunBusy} onClick={onQuickRun}>{quickRunBusy ? "Quick Run working…" : desktopAvailable && llmReady ? "Start Quick Run" : desktopAvailable ? "Connect model to start" : "Open model options"}</button></div>
+        <div><span className="quick-run-kicker">Optional AI automation</span><h2>Get a one-click outcome preview</h2><p>AI generates ideas when needed and proposes missing review inputs. A local profile-priority formula selects the strongest exploration match, then the locked review formula calculates an isolated preview without changing your live review or inventing evidence.</p><small>Generate → Local priority select → AI propose → Locked formula → Provisional outcome · Cloud models confirm before context is sent</small></div>
+        <div><strong>Automatic selection. Locked calculation.</strong><button className="button primary" disabled={quickRunBusy} onClick={onQuickRun}>{quickRunBusy ? "Quick Run working…" : desktopAvailable && llmReady ? "AI one-click preview" : desktopAvailable ? "Connect model to start" : "Open model options"}</button><button className="button secondary quick-guided-button" disabled={quickRunBusy} onClick={onGuidedQuickRun}>Guided review</button></div>
       </section>
       <div className="overview-grid">
         <section className="overview-main">

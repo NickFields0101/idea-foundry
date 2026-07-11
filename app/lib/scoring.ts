@@ -1,4 +1,5 @@
 import rubricData from "./rubric.json" with { type: "json" };
+import type { PersonalityProfileResult } from "./personality";
 
 export const ENGINE_VERSION = "v3-powershell-parity/1.0.2";
 export const FRAMEWORK_VERSION = "v3";
@@ -207,6 +208,10 @@ export interface GenerationProfile {
   locked: boolean;
   searchThemes: WeightedDimension[];
   fitDimensions: WeightedDimension[];
+  /** Optional, derived IPIP-NEO-120 result. Raw questionnaire answers are never stored here. */
+  personalityAssessment?: PersonalityProfileResult;
+  /** Exact domain/facet positions stay out of LLM prompts unless the user explicitly enables this. */
+  sharePersonalityScoresWithAi?: boolean;
   generationWeights: {
     personalFit: number;
     opportunitySignal: number;
@@ -567,6 +572,30 @@ export function validateGenerationProfile(profile: GenerationProfile) {
   }
   if (profile.fitDimensions.some((item) => !item.label.trim() || !Number.isInteger(item.weight) || item.weight < 0)) {
     errors.push("Every personal-fit dimension needs a label and non-negative whole-number weight.");
+  }
+  if (profile.sharePersonalityScoresWithAi && !profile.personalityAssessment) {
+    errors.push("Exact personality scores cannot be shared without a completed assessment.");
+  }
+  if (profile.personalityAssessment) {
+    const assessment = profile.personalityAssessment;
+    const validDomainCodes = new Set(["N", "E", "O", "A", "C"]);
+    const domainCodes = assessment.domains.map((domain) => domain.code);
+    const workStyleWeight = assessment.workStyleFit.reduce((sum, dimension) => sum + dimension.weight, 0);
+    if (
+      assessment.instrument !== "IPIP-NEO-120"
+      || assessment.scoringVersion !== "ipip-neo-120-scale-position/1.0.0"
+      || assessment.completedItems !== 120
+      || assessment.domains.length !== 5
+      || new Set(domainCodes).size !== 5
+      || domainCodes.some((code) => !validDomainCodes.has(code))
+      || assessment.domains.some((domain) => !Number.isFinite(domain.score) || domain.score < 0 || domain.score > 100)
+      || assessment.facets.length !== 30
+      || assessment.facets.some((facet) => !Number.isFinite(facet.score) || facet.score < 0 || facet.score > 100)
+      || assessment.workStyleFit.length !== 5
+      || workStyleWeight !== 100
+    ) {
+      errors.push("The saved IPIP-NEO-120 result is incomplete or invalid.");
+    }
   }
   if (profile.locked && errors.length > 0) errors.push("A profile with invalid weights cannot be locked.");
   return errors;

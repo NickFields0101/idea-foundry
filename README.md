@@ -8,12 +8,12 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [GitHub Releases](https://github.com/NickFields0101/idea-foundry/releases/latest).
 
-- **Installer:** download `Idea-Foundry-Setup-0.4.1-x64.exe`, double-click it, choose an install folder, and launch Idea Foundry from the desktop or Start menu.
-- **Portable:** download `Idea-Foundry-Portable-0.4.1-x64.exe` and double-click it. It runs without installing anything.
+- **Installer:** download `Idea-Foundry-Setup-0.5.0-x64.exe`, double-click it, choose an install folder, and launch Idea Foundry from the desktop or Start menu.
+- **Portable:** download `Idea-Foundry-Portable-0.5.0-x64.exe` and double-click it. It runs without installing anything.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
-Version `0.4.1` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
+Version `0.5.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
 
 ## Download and install on macOS
 
@@ -50,6 +50,16 @@ To connect a model:
 
 Every generated item is marked as an editable AI draft. It cannot write claims, evidence, grades, gates, caps, scores, or advancement results.
 
+## Optional research-based personality profile
+
+For more relevant idea generation, a user can complete the public-domain **Johnson (2014) IPIP-NEO-120** Big Five assessment inside Idea Foundry. The 120-item questionnaire usually takes 15–20 minutes and reports five broad domains plus 30 facets. It is available as an optional alternative to entering profile preferences manually.
+
+Results are shown as 0–100 **response-scale positions**, not population percentiles. They describe how the user answered this questionnaire; they do not rank the user against other people. The assessment is for self-reflection and idea personalization only. It is not a diagnosis and must not be used for hiring, employment, education, insurance, credit, healthcare, or any other consequential decision.
+
+Unfinished raw answers are kept only in the current session's `sessionStorage` so the questionnaire can be resumed. Raw answers are not saved with the project or included in exports. After the user applies a completed result, only the derived assessment result is saved locally and may be included in a user-created export. Exact scores are included in connected-model prompts only when the user separately opts in; with a cloud provider, that means the derived scores leave the device. Otherwise the connected model receives no exact personality scores. The profile can influence idea prompts and personal-fit ordering, but it cannot alter the 51-claim rubric, weights, gates, evidence validation, or deterministic decision formula.
+
+Instrument and scoring references are listed in [Third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Optional AI-assisted review
 
 The two review assistants are available only in the desktop edition with a connected model. They work with local Ollama or LM Studio models and with cloud OpenRouter or OpenAI-compatible providers.
@@ -63,15 +73,17 @@ If you choose a cloud provider, the relevant idea, review context, or pasted evi
 
 ## Optional Quick Run
 
-Select **Quick Run** on the welcome screen or Home to start the full workflow with one button. It generates a four-idea slate when needed, pauses for the user to choose the direction, drafts unanswered merit ratings, opens the evidence organizer, refreshes gate recommendations against the current evidence, and then opens the deterministic decision.
+Select **AI one-click preview** on the welcome screen or Home to ask a connected model to generate ideas when needed and propose values for unanswered merit claims and unresolved gates. When the user has not already selected an idea, Idea Foundry’s local profile-priority formula chooses the strongest saved exploration match. The app applies AI proposals only to an isolated copy of the review, derives an unresolved protocol route from the chosen idea’s declared Xahau/Evernode route when possible, then its locked local formula calculates a provisional outcome preview.
 
-Quick Run automates preparation, not approval. It never chooses an idea, applies a merit rating, accepts an evidence record, resolves a gate, or changes the final outcome without a user action. Evidence-free reviews remain explicitly provisional. When a cloud model is connected, Quick Run confirms before it sends a project, notes, or stored evidence excerpts; local Ollama and LM Studio flows stay on the computer.
+The preview does not modify the live review, apply an official rating or gate decision, create evidence, or verify evidence. Existing human decisions and evidence are preserved, and missing evidence remains missing. The result is always labeled provisional; the AI proposes inputs, while the deterministic engine—not the model—calculates the displayed outcome. Users can inspect the selected idea and complete the normal evidence-backed review separately. **Guided review** remains available for people who prefer to approve each checkpoint themselves.
+
+When a cloud model is connected, Quick Run confirms before sending the operation-specific idea and review context. Local Ollama and LM Studio flows stay on the computer. A Quick Run never sends raw personality-test answers; exact derived scores are included only if the user enabled the separate personality-sharing option.
 
 ## Use the framework
 
 1. Select **Start a project**, **Personalize my ideas**, or **I already have an idea**.
 2. Generate ideas with a connected model, add your own, try the examples, or copy the prompt into any LLM.
-3. Choose one idea. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
+3. Choose one idea, use the optional AI one-click preview, or continue through Guided review. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
 4. Open **Evaluate**, choose the target stage and archetype, and assess all 51 atomic claims with merit from 0–5. In the desktop app, you may ask the connected model to draft unanswered claim merits and gate recommendations, then approve only the useful proposals.
 5. Open **Evidence**, attach proof manually or use the desktop evidence organizer with pasted source text, and assign E0–E4. The validator checks type ceilings, dates, verification, claim links, duplicates, and counterevidence.
 6. Resolve the eight non-compensable gates.
@@ -96,9 +108,12 @@ Quick Run automates preparation, not approval. It never chooses an idea, applies
 - Projects are stored locally on the current device.
 - There is no analytics, wallet connection, hosted project database, or automatic upload.
 - Private profile data is excluded from exports by default.
+- Unfinished personality-assessment answers stay only in the current session's `sessionStorage`; project storage and exports contain only the derived result after completion.
+- Exact derived personality scores are withheld from connected-model prompts unless the user explicitly opts in. Raw questionnaire answers are never sent as profile context.
 - Computed fields in imported packets are ignored and recalculated locally.
 - API credentials are never stored in project JSON or browser storage.
 - Evaluation and evidence AI drafts remain staged until the user explicitly applies them; each application can be undone in one click.
+- An AI one-click outcome is calculated in an isolated shadow review, remains provisional, and cannot overwrite the live review or create or verify evidence.
 - The evidence organizer does not persist the full pasted source. Approved artifacts retain only the accepted excerpt, source fingerprint, and model provenance.
 - Ollama and LM Studio are forced to localhost in their named connector modes.
 - OpenRouter is pinned to its official HTTPS API URL so its key cannot be redirected to another host.
@@ -168,6 +183,8 @@ npm test
 - `public/og.png` — social preview image
 
 Unless otherwise noted, repository assets are distributed under the repository's MIT license. Idea Foundry is an independent open-source project and is not an official Xahau or Evernode product; names and marks belonging to third parties remain their respective owners.
+
+The optional IPIP-NEO-120 personality assessment is a public-domain instrument and is documented separately in [Third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Methodology source
 

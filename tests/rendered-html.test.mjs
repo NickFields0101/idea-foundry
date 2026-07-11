@@ -41,7 +41,7 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   ]);
 
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
-  assert.match(page, /changes idea ranking only—never evidence or the final decision score/i);
+  assert.match(page, /changes idea generation and ranking only—never evidence or the final decision score/i);
   assert.match(page, /AI output stays editable and never becomes evidence or a score automatically/i);
   assert.match(page, /OpenRouter/);
   assert.match(page, /Paste your OpenRouter API key/);
