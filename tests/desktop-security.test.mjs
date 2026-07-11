@@ -30,11 +30,29 @@ test("desktop main process isolates the UI and protects credentials", async () =
 test("AI generation cannot write deterministic review inputs", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const generationStart = page.indexOf("async function generateWithConnectedLlm");
-  const generationEnd = page.indexOf("async function saveAiConnectionOrOpenSettings", generationStart);
+  const generationEnd = page.indexOf("async function startQuickRun", generationStart);
   assert.ok(generationStart >= 0 && generationEnd > generationStart);
   const generationFunction = page.slice(generationStart, generationEnd);
   assert.match(generationFunction, /ideas:\s*\[\.\.\.current\.ideas, \.\.\.candidates\]/);
   assert.doesNotMatch(generationFunction, /updateReview|updateClaim|updateGate|artifacts|gates|claims/);
+});
+
+test("Quick Run automates preparation but never approval", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const quickStart = page.indexOf("async function startQuickRun");
+  const quickEnd = page.indexOf("async function saveAiConnectionOrOpenSettings", quickStart);
+  assert.ok(quickStart >= 0 && quickEnd > quickStart);
+  const quickFunctions = page.slice(quickStart, quickEnd);
+  assert.match(quickFunctions, /setQuickRunPhase\("choose-idea"\)/);
+  assert.match(quickFunctions, /setSelectedEvaluationClaims\(\[\]\)/);
+  assert.match(quickFunctions, /scope: "gates_only"/);
+  assert.match(quickFunctions, /confirmRemoteQuickRunSend/);
+  assert.match(quickFunctions, /const runId = \+\+quickRunRequestRef\.current/);
+  assert.doesNotMatch(quickFunctions, /applyEvaluationProposals|applyEvidenceProposals|applyGateProposal|reviewerVerified:\s*true/);
+  assert.match(page, /Quick does not mean automatic approval/);
+  assert.match(page, /Continue evidence-free/);
+  assert.match(page, /Send & refresh gates/);
+  assert.match(page, /Cloud model: each AI step confirms before project or evidence context is sent/);
 });
 
 test("AI review calls create staged UI drafts without mutating review input", async () => {
@@ -70,6 +88,7 @@ test("workspace reset and import purge ephemeral AI source material", async () =
   assert.match(resetFunction, /setEvidenceAnalysis\(null\)/);
   assert.match(resetFunction, /setAiUndo\(null\)/);
   assert.match(resetFunction, /generationRequestRef\.current \+= 1/);
+  assert.match(resetFunction, /quickRunRequestRef\.current \+= 1/);
   assert.match(resetFunction, /setGeneratingIdeas\(false\)/);
   const importStart = page.indexOf("function importPacket");
   const importEnd = page.indexOf("async function copyText", importStart);
@@ -77,6 +96,51 @@ test("workspace reset and import purge ephemeral AI source material", async () =
   assert.match(page, /localStorage\.removeItem\(STORAGE_KEY\);[^]*resetAiWorkspace\(\)/);
   assert.match(page, /currentEvidenceVerificationFingerprint/);
   assert.match(page, /reviewerVerified: evidenceHumanVerificationCurrent/);
+});
+
+test("clear all local data resets the UI and the protected desktop connector", async () => {
+  const [page, bridge, preload, main] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/desktop-bridge.d.ts", import.meta.url), "utf8"),
+    readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8"),
+    readFile(new URL("../desktop/main.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(bridge, /clearConfig\(\): Promise<LlmConfig>/);
+  assert.match(preload, /clearConfig: \(\) => ipcRenderer\.invoke\(CHANNELS\.clearConfig\)/);
+  assert.match(main, /fs\.rm\(target, \{ force: true \}\)/);
+  assert.match(main, /fs\.rm\(`\$\{target\}\.tmp`, \{ force: true \}\)/);
+  assert.match(main, /configMutationQueue/);
+  const clearStart = page.indexOf("async function clearAllLocalData");
+  const clearEnd = page.indexOf("function updateClaim", clearStart);
+  const clearFunction = page.slice(clearStart, clearEnd);
+  assert.match(clearFunction, /bridge\.llm\.clearConfig\(\)/);
+  assert.match(clearFunction, /clearingLocalDataRef\.current = true[^]*await bridge\.llm\.clearConfig\(\)/);
+  assert.match(clearFunction, /setClearingLocalData\(true\)/);
+  assert.match(clearFunction, /setAiAssistBusy\(null\)[^]*setGeneratingIdeas\(false\)[^]*setModelSearchBusy\(false\)[^]*setLlmBusy\(null\)/);
+  assert.match(clearFunction, /quickRunRequestRef\.current \+= 1/);
+  assert.match(clearFunction, /resetModelEditor\(DEFAULT_LLM_CONFIG\)/);
+  assert.match(page, /editorConfigForProvider\(provider, persistedLlmConfig\)/);
+  assert.match(page, /sameCredentialBoundary\(llmConfig, persistedLlmConfig\)/);
+  assert.match(page, /async function saveAiConnectionOrOpenSettings\(\) \{[^]*if \(clearingLocalDataRef\.current\) return null/);
+  assert.match(page, /setModelSearch\(nextConfig\.model\)/);
+});
+
+test("model editor changes beat late config responses and keep raw keys on their chosen boundary", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const editorChangeStart = page.indexOf("function beginModelEditorChange");
+  const editorChangeEnd = page.indexOf("function clearProjectData", editorChangeStart);
+  const editorChange = page.slice(editorChangeStart, editorChangeEnd);
+  assert.match(editorChange, /modelConfigRequestRef\.current \+= 1/);
+  assert.match(editorChange, /modelSearchRequestRef\.current \+= 1/);
+  assert.match(editorChange, /setModelSearchBusy\(false\)/);
+  assert.match(editorChange, /clearRawKey[^]*setLlmApiKey\(""\)/);
+  assert.match(editorChange, /clearCatalog[^]*setLlmModels\(\[\]\)/);
+  assert.match(page, /beginModelEditorChange\(\{ clearRawKey: true, clearCatalog: true \}\)[^]*editorConfigForProvider/);
+  assert.match(page, /Base URL[^]*beginModelEditorChange\(\{ clearRawKey: true, clearCatalog: true \}\)/);
+  assert.match(page, /onChange=\{\(event\) => \{\s*beginModelEditorChange\(\);\s*const nextKey/);
+  assert.match(page, /requestId !== modelConfigRequestRef\.current/);
+  assert.match(page, /const modelEditorLocked = clearingLocalData[^]*llmBusy !== null/);
+  assert.match(page, /const modelEditorLocked = clearingLocalData[^]*generatingIdeas[^]*aiAssistBusy !== null[^]*quickRunBusy/);
 });
 
 test("AI evaluation and evidence IPC exposes proposal-only operations", async () => {

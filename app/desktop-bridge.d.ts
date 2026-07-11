@@ -68,6 +68,8 @@ export interface DraftEvaluationInput extends LlmConnectionOptions {
   projectContext: string;
   /** Optional canonical rubric claim IDs to evaluate. Omit to request the complete catalog. */
   claimIds?: string[];
+  /** Quick Run may refresh only canonical gates after evidence changes. */
+  scope?: "claims_and_gates" | "gates_only";
 }
 
 export interface EvaluationClaimProposal {
@@ -162,6 +164,7 @@ export interface IdeaFoundryBridge {
   llm: {
     getConfig(): Promise<LlmConfig>;
     saveConfig(input: SaveLlmConfigInput): Promise<LlmConfig>;
+    clearConfig(): Promise<LlmConfig>;
     testConnection(input?: LlmConnectionOptions): Promise<LlmConnectionTest>;
     listModels(input?: ListModelsInput): Promise<LlmModel[]>;
     generateIdeas(input: GenerateIdeasInput): Promise<GeneratedIdeasResult>;

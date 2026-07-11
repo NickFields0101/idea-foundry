@@ -37,6 +37,7 @@ import type {
   DraftEvaluationResult,
   EvidenceProposal,
   ExtractEvidenceResult,
+  GeneratedIdeasResult,
   ListModelsInput,
   LlmConfig,
   LlmConnectionOptions,
@@ -55,7 +56,18 @@ const BRAND_ICON_URL = brandAssetUrl("idea-foundry-icon.png");
 const BRAND_LOGO_URL = brandAssetUrl("idea-foundry-logo.png");
 const BRAND_MARK_URL = brandAssetUrl("idea-foundry-mark-transparent.png");
 
-type Section = "overview" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "export";
+type Section = "overview" | "quick" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "export";
+
+type QuickRunPhase =
+  | "idle"
+  | "generating"
+  | "choose-idea"
+  | "drafting-evaluation"
+  | "approve-evaluation"
+  | "evidence"
+  | "refreshing-gates"
+  | "approve-gates"
+  | "decision";
 
 interface IdeaCandidate {
   id: string;
@@ -176,6 +188,37 @@ const DEFAULT_LLM_CONFIG: LlmConfig = {
   model: "",
   hasApiKey: false,
 };
+
+function editorConfigForProvider(provider: LlmProvider, persisted: LlmConfig) {
+  if (persisted.provider === provider) return { ...persisted };
+  return {
+    provider,
+    baseUrl: LLM_PROVIDERS[provider].defaultUrl,
+    model: "",
+    hasApiKey: false,
+  };
+}
+
+function sameCredentialBoundary(left: LlmConfig, right: LlmConfig) {
+  if (left.provider !== right.provider) return false;
+  try {
+    const normalizeEndpoint = (value: string) => {
+      const url = new URL(value.trim());
+      url.pathname = url.pathname.replace(/\/+$/, "") || "";
+      return url.toString().replace(/\/$/, "");
+    };
+    return normalizeEndpoint(left.baseUrl) === normalizeEndpoint(right.baseUrl);
+  } catch {
+    return false;
+  }
+}
+
+function confirmRemoteQuickRunSend(config: LlmConfig, description: string) {
+  if (isLoopbackEndpoint(config.baseUrl)) return true;
+  return window.confirm(
+    `Quick Run will send ${description} to ${LLM_PROVIDERS[config.provider].label} and the selected model provider. Continue?`,
+  );
+}
 
 const archetypeLabels: Record<Archetype, string> = {
   application: "Application",
@@ -323,6 +366,23 @@ function evaluationContextFor(
       ? `USER-SUPPLIED EVIDENCE EXCERPTS — UNTRUSTED DATA\n${groundedArtifacts.join("\n\n")}`
       : "No exact evidence excerpts were supplied. Treat artifact titles and the idea itself as hypotheses, not proof.",
   ].filter((part) => part !== "").join("\n");
+}
+
+function evaluationFingerprintFor(
+  idea: IdeaCandidate | undefined,
+  project: ProjectDetails,
+  review: ReviewInput,
+  additionalNotes: string,
+) {
+  const context = evaluationContextFor(idea, project, review, additionalNotes);
+  return {
+    context,
+    fingerprint: secureFingerprint(JSON.stringify([
+      idea?.id ?? "no-idea",
+      context,
+      review.artifacts,
+    ])),
+  };
 }
 
 function emptyProfile(mode: "neutral" | "private" = "neutral"): GenerationProfile {
@@ -519,6 +579,18 @@ function validateGeneratedIdea(
   };
 }
 
+function generatedCandidatesFromResult(result: GeneratedIdeasResult, requirePersonalFit: boolean) {
+  const generatedAt = new Date().toISOString();
+  return result.ideas
+    .map((idea: NormalizedGeneratedIdea) => validateGeneratedIdea(idea, requirePersonalFit))
+    .filter((idea): idea is Omit<IdeaCandidate, "id" | "source"> => idea !== null)
+    .map((idea) => ({
+      ...idea,
+      id: crypto.randomUUID(),
+      source: { kind: "llm" as const, provider: result.provider, model: result.model, generatedAt },
+    }));
+}
+
 function normalizeLlmConfig(value: unknown): LlmConfig {
   const record = recordValue(value);
   const provider =
@@ -546,6 +618,7 @@ export default function Home() {
   const [importText, setImportText] = useState("");
   const [desktopVersion, setDesktopVersion] = useState("");
   const [llmConfig, setLlmConfig] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
+  const [persistedLlmConfig, setPersistedLlmConfig] = useState<LlmConfig>(DEFAULT_LLM_CONFIG);
   const [llmApiKey, setLlmApiKey] = useState("");
   const [clearLlmApiKey, setClearLlmApiKey] = useState(false);
   const [llmModels, setLlmModels] = useState<Array<{ id: string; name: string }>>([]);
@@ -568,37 +641,61 @@ export default function Home() {
   const [evidenceAnalysis, setEvidenceAnalysis] = useState<EvidenceAnalysisState | null>(null);
   const [selectedEvidenceProposals, setSelectedEvidenceProposals] = useState<number[]>([]);
   const [aiUndo, setAiUndo] = useState<AiUndoState | null>(null);
+  const [quickRunPhase, setQuickRunPhase] = useState<QuickRunPhase>("idle");
+  const [quickRunMessage, setQuickRunMessage] = useState("");
+  const [clearingLocalData, setClearingLocalData] = useState(false);
   const aiAssistRequestRef = useRef(0);
   const generationRequestRef = useRef(0);
+  const quickRunRequestRef = useRef(0);
   const modelSearchTimerRef = useRef<number | null>(null);
   const modelSearchRequestRef = useRef(0);
+  const modelConfigRequestRef = useRef(0);
+  const clearingLocalDataRef = useRef(false);
   const [evidenceDraft, setEvidenceDraft] = useState(emptyManualEvidenceDraft);
   const desktopAvailable = typeof window === "undefined" ? null : window.ideaFoundry?.desktop === true;
   const selectedLlmProvider = LLM_PROVIDERS[llmConfig.provider];
   const llmUsesRemoteEndpoint = !isLoopbackEndpoint(llmConfig.baseUrl);
-  const llmHasUsableApiKey = Boolean(llmApiKey.trim() || (llmConfig.hasApiKey && !clearLlmApiKey));
+  const llmSavedKeyAvailable = Boolean(
+    persistedLlmConfig.hasApiKey
+    && sameCredentialBoundary(llmConfig, persistedLlmConfig)
+    && !clearLlmApiKey,
+  );
+  const llmHasUsableApiKey = Boolean(llmApiKey.trim() || llmSavedKeyAvailable);
   const llmReady = Boolean(llmConfig.model.trim() && (!selectedLlmProvider.keyRequired || llmHasUsableApiKey));
+  const quickRunBusy = quickRunPhase === "generating"
+    || quickRunPhase === "drafting-evaluation"
+    || quickRunPhase === "refreshing-gates"
+    || clearingLocalData;
+  const modelEditorLocked = clearingLocalData
+    || llmBusy !== null
+    || generatingIdeas
+    || aiAssistBusy !== null
+    || quickRunBusy;
 
   useEffect(() => {
     const bridge = window.ideaFoundry;
     if (!bridge?.desktop) return;
 
     let cancelled = false;
+    const requestId = ++modelConfigRequestRef.current;
     Promise.all([bridge.app.getVersion(), bridge.llm.getConfig()])
       .then(([version, config]) => {
-        if (cancelled) return;
+        if (cancelled || requestId !== modelConfigRequestRef.current) return;
+        const normalized = normalizeLlmConfig(config);
         setDesktopVersion(version);
-        setLlmConfig(normalizeLlmConfig(config));
+        setLlmConfig(normalized);
+        setPersistedLlmConfig(normalized);
+        setModelSearch(normalized.model);
         setLlmMessage("Connector settings loaded from this computer.");
         setLlmMessageTone("neutral");
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (cancelled || requestId !== modelConfigRequestRef.current) return;
         setLlmMessage(error instanceof Error ? error.message : "Could not load the local connector settings.");
         setLlmMessageTone("error");
       })
       .finally(() => {
-        if (!cancelled) setLlmBusy(null);
+        if (!cancelled && requestId === modelConfigRequestRef.current) setLlmBusy(null);
       });
 
     return () => {
@@ -657,18 +754,12 @@ export default function Home() {
   const aiUndoAvailable = aiUndo !== null && aiUndo.appliedInputFingerprint === score.inputFingerprint;
   const profileErrors = useMemo(() => validateGenerationProfile(state.profile), [state.profile]);
   const selectedIdea = state.ideas.find((idea) => idea.id === state.project.selectedIdeaId);
-  const evaluationContext = useMemo(
-    () => evaluationContextFor(selectedIdea, state.project, state.review, evaluationNotes),
+  const evaluationSnapshot = useMemo(
+    () => evaluationFingerprintFor(selectedIdea, state.project, state.review, evaluationNotes),
     [evaluationNotes, selectedIdea, state.project, state.review],
   );
-  const evaluationContextFingerprint = useMemo(
-    () => secureFingerprint(JSON.stringify([
-      selectedIdea?.id ?? "no-idea",
-      evaluationContext,
-      state.review.artifacts,
-    ])),
-    [evaluationContext, selectedIdea?.id, state.review.artifacts],
-  );
+  const evaluationContext = evaluationSnapshot.context;
+  const evaluationContextFingerprint = evaluationSnapshot.fingerprint;
   const evidenceSourceFingerprint = useMemo(
     () => secureFingerprint(JSON.stringify([
       evidenceSource.label.trim(),
@@ -749,6 +840,7 @@ export default function Home() {
   function resetAiWorkspace() {
     aiAssistRequestRef.current += 1;
     generationRequestRef.current += 1;
+    quickRunRequestRef.current += 1;
     setAiAssistBusy(null);
     setEvaluationNotes("");
     setEvaluationDraft(null);
@@ -760,9 +852,97 @@ export default function Home() {
     setAiUndo(null);
     setGeneratingIdeas(false);
     setLastGeneration(null);
+    setQuickRunPhase("idle");
+    setQuickRunMessage("");
     setLlmApiKey("");
     setClearLlmApiKey(false);
     setMobileMoreOpen(false);
+  }
+
+  function resetModelEditor(config: LlmConfig = DEFAULT_LLM_CONFIG) {
+    if (modelSearchTimerRef.current !== null) {
+      window.clearTimeout(modelSearchTimerRef.current);
+      modelSearchTimerRef.current = null;
+    }
+    modelSearchRequestRef.current += 1;
+    modelConfigRequestRef.current += 1;
+    setLlmConfig({ ...config });
+    setPersistedLlmConfig({ ...config });
+    setLlmApiKey("");
+    setClearLlmApiKey(false);
+    setLlmModels([]);
+    setModelSearch(config.model);
+    setModelListError("");
+    setModelPickerOpen(false);
+    setModelActiveIndex(0);
+    setModelSearchBusy(false);
+    setLlmBusy(null);
+    setLlmMessage("");
+    setLlmMessageTone("neutral");
+  }
+
+  function beginModelEditorChange({ clearRawKey = false, clearCatalog = false }: { clearRawKey?: boolean; clearCatalog?: boolean } = {}) {
+    modelConfigRequestRef.current += 1;
+    modelSearchRequestRef.current += 1;
+    if (modelSearchTimerRef.current !== null) {
+      window.clearTimeout(modelSearchTimerRef.current);
+      modelSearchTimerRef.current = null;
+    }
+    setModelSearchBusy(false);
+    if (clearCatalog) {
+      setLlmModels([]);
+      setModelListError("");
+      setModelPickerOpen(false);
+      setModelSearchBusy(false);
+    }
+    if (clearRawKey) {
+      setLlmApiKey("");
+      setClearLlmApiKey(false);
+    }
+  }
+
+  function clearProjectData() {
+    localStorage.removeItem(STORAGE_KEY);
+    resetAiWorkspace();
+    setImportText("");
+    setIncludeProfile(false);
+    setState(defaultState());
+    setSection("overview");
+  }
+
+  async function clearAllLocalData() {
+    if (clearingLocalDataRef.current) return;
+    if (!window.confirm("Clear this project and forget the saved AI connection and protected API key on this computer?")) return;
+    const bridge = window.ideaFoundry;
+    clearingLocalDataRef.current = true;
+    setClearingLocalData(true);
+    try {
+      if (modelSearchTimerRef.current !== null) {
+        window.clearTimeout(modelSearchTimerRef.current);
+        modelSearchTimerRef.current = null;
+      }
+      aiAssistRequestRef.current += 1;
+      generationRequestRef.current += 1;
+      quickRunRequestRef.current += 1;
+      modelSearchRequestRef.current += 1;
+      modelConfigRequestRef.current += 1;
+      setAiAssistBusy(null);
+      setGeneratingIdeas(false);
+      setModelSearchBusy(false);
+      setLlmBusy(null);
+      setQuickRunPhase("idle");
+      setQuickRunMessage("");
+      if (bridge?.desktop) await bridge.llm.clearConfig();
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The saved AI connection could not be cleared.");
+      clearingLocalDataRef.current = false;
+      setClearingLocalData(false);
+      return;
+    }
+    resetModelEditor(DEFAULT_LLM_CONFIG);
+    clearProjectData();
+    clearingLocalDataRef.current = false;
+    setClearingLocalData(false);
   }
 
   function updateClaim(claimId: string, patch: Partial<ReviewInput["claims"][number]>) {
@@ -788,6 +968,11 @@ export default function Home() {
     start("neutral");
     addIdea();
     setSection("ideas");
+  }
+
+  function startQuickFromWelcome() {
+    setState((current) => ({ ...current, started: true, profile: emptyProfile("neutral") }));
+    void startQuickRun();
   }
 
   function addIdea() {
@@ -819,11 +1004,16 @@ export default function Home() {
   }
 
   function beginReview(idea: IdeaCandidate) {
+    const project = { ...state.project, title: idea.title, selectedIdeaId: idea.id };
     setState((current) => ({
       ...current,
-      project: { ...current.project, title: idea.title, selectedIdeaId: idea.id },
+      project,
     }));
-    setSection("review");
+    if (quickRunPhase === "choose-idea") {
+      void draftQuickRunEvaluation(idea, project, ++quickRunRequestRef.current);
+    } else {
+      setSection("review");
+    }
   }
 
   function currentLlmInput(): SaveLlmConfigInput {
@@ -837,30 +1027,37 @@ export default function Home() {
   }
 
   async function connectLlm() {
+    if (clearingLocalDataRef.current) return;
     const bridge = window.ideaFoundry;
     if (!bridge?.desktop) throw new Error("The model connector is available in the desktop app.");
+    const requestId = ++modelConfigRequestRef.current;
     setLlmBusy("saving");
     setLlmMessage("Saving and checking this connection…");
     setLlmMessageTone("neutral");
     try {
       const saved = await bridge.llm.saveConfig(currentLlmInput());
+      if (requestId !== modelConfigRequestRef.current) return;
       const normalized = normalizeLlmConfig(saved);
       setLlmConfig(normalized);
+      setPersistedLlmConfig(normalized);
       setLlmApiKey("");
       setClearLlmApiKey(false);
       const result = await bridge.llm.testConnection(normalized as LlmConnectionOptions);
+      if (requestId !== modelConfigRequestRef.current) return;
       setLlmMessage(result.ok ? `${result.message || "Connection succeeded."} Settings were saved on this computer.` : result.message || "The settings were saved, but the connection failed.");
       setLlmMessageTone(result.ok ? "success" : "error");
     } catch (error) {
+      if (requestId !== modelConfigRequestRef.current) return;
       const message = error instanceof Error ? error.message : "Could not connect to this model.";
       setLlmMessage(message);
       setLlmMessageTone("error");
     } finally {
-      setLlmBusy(null);
+      if (requestId === modelConfigRequestRef.current) setLlmBusy(null);
     }
   }
 
   async function loadLlmModels({ query = "", background = false, apiKeyOverride }: { query?: string; background?: boolean; apiKeyOverride?: string } = {}) {
+    if (clearingLocalDataRef.current) return;
     const bridge = window.ideaFoundry;
     if (!bridge?.desktop) return;
     const requestId = ++modelSearchRequestRef.current;
@@ -920,7 +1117,7 @@ export default function Home() {
     modelSearchRequestRef.current += 1;
 
     if (llmConfig.provider !== "openrouter") {
-      if (llmModels.length === 0 && !modelSearchBusy) void loadLlmModels({ background: true });
+      if (llmModels.length === 0) void loadLlmModels({ background: true });
       return;
     }
 
@@ -929,7 +1126,7 @@ export default function Home() {
       setModelSearchBusy(false);
       return;
     }
-    if (!(apiKeyOverride.trim() || (llmConfig.hasApiKey && !clearLlmApiKey))) {
+    if (!(apiKeyOverride.trim() || llmSavedKeyAvailable)) {
       setLlmModels([]);
       setModelSearchBusy(false);
       setModelListError("Enter your OpenRouter API key first, then type a model name or version.");
@@ -955,6 +1152,7 @@ export default function Home() {
   function selectLlmModel(model: { id: string; name: string }) {
     if (modelSearchTimerRef.current !== null) window.clearTimeout(modelSearchTimerRef.current);
     modelSearchRequestRef.current += 1;
+    beginModelEditorChange();
     setLlmConfig((current) => ({ ...current, model: model.id }));
     setModelSearch(model.name || model.id);
     setModelSearchBusy(false);
@@ -963,6 +1161,7 @@ export default function Home() {
   }
 
   async function generateWithConnectedLlm() {
+    if (clearingLocalDataRef.current) return;
     const bridge = window.ideaFoundry;
     if (!bridge?.desktop) {
       setSection("model");
@@ -987,6 +1186,7 @@ export default function Home() {
       const saved = normalizeLlmConfig(await bridge.llm.saveConfig(currentLlmInput()));
       if (requestId !== generationRequestRef.current) return;
       setLlmConfig(saved);
+      setPersistedLlmConfig(saved);
       setLlmApiKey("");
       setClearLlmApiKey(false);
       const generationPrompt = prompt.replace("Generate 8 diverse candidates", `Generate ${ideaCount} diverse candidates`);
@@ -998,15 +1198,7 @@ export default function Home() {
         model: saved.model,
       });
       if (requestId !== generationRequestRef.current) return;
-      const generatedAt = new Date().toISOString();
-      const candidates = result.ideas
-        .map((idea: NormalizedGeneratedIdea) => validateGeneratedIdea(idea, state.profile.mode === "private"))
-        .filter((idea): idea is Omit<IdeaCandidate, "id" | "source"> => idea !== null)
-        .map((idea) => ({
-          ...idea,
-          id: crypto.randomUUID(),
-          source: { kind: "llm" as const, provider: result.provider, model: result.model, generatedAt },
-        }));
+      const candidates = generatedCandidatesFromResult(result, state.profile.mode === "private");
       if (candidates.length === 0) throw new Error("The model returned no ideas that passed the local schema.");
       setState((current) => ({ ...current, ideas: [...current.ideas, ...candidates] }));
       setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
@@ -1021,7 +1213,220 @@ export default function Home() {
     }
   }
 
+  async function startQuickRun() {
+    if (clearingLocalDataRef.current) return;
+    if (desktopAvailable !== true || !llmReady) {
+      setQuickRunPhase("idle");
+      setLlmMessage("Connect a model, then return Home and start Quick Run.");
+      setLlmMessageTone("neutral");
+      setSection("model");
+      return;
+    }
+
+    const runId = ++quickRunRequestRef.current;
+    setQuickRunMessage("");
+    if (selectedIdea) {
+      await draftQuickRunEvaluation(selectedIdea, state.project, runId);
+      return;
+    }
+    if (state.ideas.length > 0) {
+      setQuickRunPhase("choose-idea");
+      setQuickRunMessage("Choose the idea you want to test. The first card is the top exploration match, not a final recommendation.");
+      setSection("ideas");
+      return;
+    }
+
+    setQuickRunPhase("generating");
+    setQuickRunMessage("Creating four editable hypotheses. Nothing generated here counts as evidence.");
+    setSection("quick");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || runId !== quickRunRequestRef.current) {
+        if (runId === quickRunRequestRef.current) setQuickRunPhase("idle");
+        return;
+      }
+      if (!confirmRemoteQuickRunSend(
+        connection.saved,
+        state.profile.mode === "private"
+          ? "your project boundary and private generation profile"
+          : "your project boundary and the generation prompt",
+      )) {
+        setQuickRunPhase("idle");
+        setQuickRunMessage("");
+        setSection("overview");
+        return;
+      }
+      const generationPrompt = prompt.replace("Generate 8 diverse candidates", "Generate 4 diverse candidates");
+      const result = await connection.bridge.llm.generateIdeas({
+        prompt: generationPrompt,
+        count: 4,
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      const candidates = generatedCandidatesFromResult(result, state.profile.mode === "private");
+      if (candidates.length === 0) throw new Error("The model returned no ideas that passed the local schema.");
+      setState((current) => ({ ...current, ideas: [...current.ideas, ...candidates] }));
+      setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
+      setQuickRunPhase("choose-idea");
+      setQuickRunMessage("Choose one hypothesis to continue. Idea Foundry will not choose a business direction for you.");
+      setSection("ideas");
+    } catch (error) {
+      if (runId !== quickRunRequestRef.current) return;
+      setQuickRunPhase("idle");
+      setLlmMessage(error instanceof Error ? error.message : "Quick Run could not generate an idea slate.");
+      setLlmMessageTone("error");
+      setSection("model");
+    }
+  }
+
+  async function draftQuickRunEvaluation(
+    idea: IdeaCandidate,
+    projectSnapshot: ProjectDetails,
+    existingRunId?: number,
+  ) {
+    const runId = existingRunId ?? ++quickRunRequestRef.current;
+    const claimIds = state.review.claims.filter((claim) => claim.merit === null).map((claim) => claim.claimId);
+    if (claimIds.length === 0) {
+      setQuickRunPhase("evidence");
+      setQuickRunMessage(state.review.artifacts.length
+        ? "Add another real source if needed, or continue with the evidence already attached."
+        : "Add real source material, or continue with an evidence-free provisional baseline.");
+      setSection("evidence");
+      return;
+    }
+    setQuickRunPhase("drafting-evaluation");
+    setQuickRunMessage("Drafting provisional merit and gate recommendations. No review inputs are changing.");
+    setSection("quick");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || runId !== quickRunRequestRef.current) {
+        if (runId === quickRunRequestRef.current) setQuickRunPhase("idle");
+        return;
+      }
+      if (!confirmRemoteQuickRunSend(
+        connection.saved,
+        "the selected idea, current review notes, and up to 12 exact stored evidence excerpts",
+      )) {
+        setQuickRunPhase("choose-idea");
+        setQuickRunMessage("Choose an idea when you are ready to send its review context to the cloud model.");
+        setSection("ideas");
+        return;
+      }
+      const snapshot = evaluationFingerprintFor(idea, projectSnapshot, state.review, evaluationNotes);
+      const result = await connection.bridge.llm.draftEvaluation({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: snapshot.context,
+        claimIds,
+        scope: "claims_and_gates",
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      setEvaluationDraft({
+        result,
+        contextFingerprint: snapshot.fingerprint,
+        gateFingerprints: Object.fromEntries(
+          state.review.gates.map((gate) => [gate.id, gateStateFingerprint(gate)]),
+        ) as Record<GateAssessment["id"], string>,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedEvaluationClaims([]);
+      setQuickRunPhase("approve-evaluation");
+      setQuickRunMessage("Review and explicitly apply only the merit drafts you agree with. Evidence remains E0.");
+      setSection("review");
+    } catch (error) {
+      if (runId !== quickRunRequestRef.current) return;
+      setQuickRunPhase("idle");
+      setLlmMessage(error instanceof Error ? error.message : "Quick Run could not draft the evaluation.");
+      setLlmMessageTone("error");
+      setSection("model");
+    }
+  }
+
+  async function refreshQuickRunGates(reviewSnapshot: ReviewInput = state.review) {
+    const idea = state.ideas.find((candidate) => candidate.id === state.project.selectedIdeaId);
+    if (!idea) {
+      setQuickRunPhase("choose-idea");
+      setSection("ideas");
+      return;
+    }
+    const runId = ++quickRunRequestRef.current;
+    setQuickRunPhase("refreshing-gates");
+    setQuickRunMessage("Refreshing gate recommendations against the current evidence. Existing claim ratings will not be touched.");
+    setSection("quick");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || runId !== quickRunRequestRef.current) {
+        if (runId === quickRunRequestRef.current) setQuickRunPhase("idle");
+        return;
+      }
+      if (!confirmRemoteQuickRunSend(
+        connection.saved,
+        "the selected idea, current review notes, and up to 12 exact stored evidence excerpts",
+      )) {
+        setQuickRunPhase("evidence");
+        setQuickRunMessage("Nothing was sent. Continue when you are ready, or exit Quick Run.");
+        setSection("evidence");
+        return;
+      }
+      const snapshot = evaluationFingerprintFor(idea, state.project, reviewSnapshot, evaluationNotes);
+      const result = await connection.bridge.llm.draftEvaluation({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: snapshot.context,
+        claimIds: [],
+        scope: "gates_only",
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      setEvaluationDraft({
+        result,
+        contextFingerprint: snapshot.fingerprint,
+        gateFingerprints: Object.fromEntries(
+          reviewSnapshot.gates.map((gate) => [gate.id, gateStateFingerprint(gate)]),
+        ) as Record<GateAssessment["id"], string>,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedEvaluationClaims([]);
+      setQuickRunPhase("approve-gates");
+      setQuickRunMessage("Apply each gate separately, or leave it unresolved. AI cannot make a gate decision for you.");
+      setSection("review");
+    } catch (error) {
+      if (runId !== quickRunRequestRef.current) return;
+      setQuickRunPhase("idle");
+      setLlmMessage(error instanceof Error ? error.message : "Quick Run could not refresh the gates.");
+      setLlmMessageTone("error");
+      setSection("model");
+    }
+  }
+
+  function continueQuickRun() {
+    if (quickRunPhase === "choose-idea") setSection("ideas");
+    if (quickRunPhase === "approve-evaluation") {
+      setQuickRunPhase("evidence");
+      setQuickRunMessage("Add real source material, or continue with an evidence-free provisional baseline.");
+      setSection("evidence");
+    }
+    if (quickRunPhase === "evidence") void refreshQuickRunGates();
+    if (quickRunPhase === "approve-gates") {
+      setQuickRunPhase("decision");
+      setQuickRunMessage("The deterministic calculator produced this result. AI did not choose or calculate the outcome.");
+      setSection("results");
+    }
+    if (quickRunPhase === "decision") setSection("results");
+  }
+
+  function exitQuickRun() {
+    quickRunRequestRef.current += 1;
+    setQuickRunPhase("idle");
+    setQuickRunMessage("");
+    if (section === "quick") setSection("overview");
+  }
+
   async function saveAiConnectionOrOpenSettings() {
+    if (clearingLocalDataRef.current) return null;
     const bridge = window.ideaFoundry;
     if (!bridge?.desktop) {
       setSection("model");
@@ -1033,8 +1438,11 @@ export default function Home() {
       setSection("model");
       return null;
     }
+    const configRequestId = modelConfigRequestRef.current;
     const saved = normalizeLlmConfig(await bridge.llm.saveConfig(currentLlmInput()));
+    if (configRequestId !== modelConfigRequestRef.current) return null;
     setLlmConfig(saved);
+    setPersistedLlmConfig(saved);
     setLlmApiKey("");
     setClearLlmApiKey(false);
     return { bridge, saved };
@@ -1170,6 +1578,11 @@ export default function Home() {
       });
       setSelectedEvaluationClaims([]);
       setToast(`${result.appliedClaimIds.length} merit recommendation${result.appliedClaimIds.length === 1 ? "" : "s"} applied; evidence grades unchanged`);
+      if (quickRunPhase === "approve-evaluation") {
+        setQuickRunPhase("evidence");
+        setQuickRunMessage("Add real source material, or continue with an evidence-free provisional baseline.");
+        setSection("evidence");
+      }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "The selected recommendations could not be applied.");
     }
@@ -1221,6 +1634,14 @@ export default function Home() {
       }));
       const linked = result.linkedClaimIds.length ? `; ${result.linkedClaimIds.length} supporting claim${result.linkedClaimIds.length === 1 ? "" : "s"} updated` : "";
       setToast(`${result.artifacts.length} grounded record${result.artifacts.length === 1 ? "" : "s"} added${linked}`);
+      if (quickRunPhase === "evidence") {
+        if (llmUsesRemoteEndpoint) {
+          setQuickRunMessage("Evidence added. Choose Send & refresh gates when you are ready to share the current review excerpts with the cloud model.");
+          setSection("evidence");
+        } else {
+          void refreshQuickRunGates(result.review);
+        }
+      }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "The selected evidence could not be added.");
     }
@@ -1421,6 +1842,7 @@ export default function Home() {
             <p className="hero-lede">Turn a blank page into useful ideas, choose one, and see what real evidence actually supports.</p>
             <div className="hero-actions">
               <button className="button primary" onClick={() => start("neutral")}>Start a project <span aria-hidden="true">→</span></button>
+              <button className="button secondary" onClick={startQuickFromWelcome}>Quick Run</button>
               <button className="button secondary" onClick={() => start("private")}>Personalize my ideas</button>
               <button className="button ghost" onClick={startWithIdea}>I already have an idea</button>
             </div>
@@ -1503,33 +1925,57 @@ export default function Home() {
         <div className="rail-footer">
           <div><span>Privacy</span><strong>{state.profile.mode === "private" ? "Private profile" : "Profile-neutral"}</strong></div>
           <div><span>Rubric</span><strong>v3 · 51 claims</strong></div>
-          <button className="text-button danger" onClick={() => {
-            if (window.confirm("Clear this locally saved workspace?")) {
-              localStorage.removeItem(STORAGE_KEY);
-              resetAiWorkspace();
-              setImportText("");
-              setIncludeProfile(false);
-              setState(defaultState());
-              setSection("overview");
-            }
-          }}>Clear local data</button>
+          <div className="rail-clear-actions">
+            <button className="text-button danger" disabled={clearingLocalData} onClick={() => {
+              if (window.confirm("Clear this project? Your saved AI connection will be kept.")) clearProjectData();
+            }}>Clear project</button>
+            <button className="text-button danger" disabled={clearingLocalData} onClick={() => void clearAllLocalData()}>{clearingLocalData ? "Clearing…" : "Clear everything"}</button>
+          </div>
         </div>
       </aside>
 
       <section className="workspace">
+        {quickRunPhase !== "idle" && section !== "quick" && (
+          <QuickRunGuide
+            phase={quickRunPhase}
+            message={quickRunMessage}
+            hasEvidence={state.review.artifacts.length > 0}
+            remoteModel={llmUsesRemoteEndpoint}
+            onContinue={continueQuickRun}
+            onExit={exitQuickRun}
+          />
+        )}
         {section === "overview" && (
           <Overview
             state={state}
             score={score}
             selectedIdea={selectedIdea}
+            desktopAvailable={desktopAvailable === true}
+            llmReady={llmReady}
+            quickRunBusy={quickRunBusy}
+            onQuickRun={() => void startQuickRun()}
             onNavigate={setSection}
             onUpdateProject={(patch) => setState((current) => ({ ...current, project: { ...current.project, ...patch } }))}
           />
         )}
 
+        {section === "quick" && (
+          <div className="page-section narrow quick-run-page">
+            <PageHeading eyebrow="Quick Run" title="AI drafts the work. You approve what counts." description="Quick Run automates safe setup and pauses for idea choice, merit approval, real evidence, and every gate decision." />
+            <section className="quick-run-working" aria-live="polite">
+              <img src={BRAND_ICON_URL} alt="" aria-hidden="true" />
+              <div><span>{quickRunBusy ? "Working" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next checkpoint."}</h2><p>Idea → Evaluation → Evidence → Gates → Decision</p></div>
+              {quickRunBusy && <i aria-hidden="true" />}
+            </section>
+            <div className="quick-run-boundary"><strong>Quick does not mean automatic approval.</strong><span>No idea, merit rating, evidence record, gate, or final decision is accepted without your action.</span></div>
+            <button className="button secondary" onClick={exitQuickRun}>Exit Quick Run</button>
+          </div>
+        )}
+
         {section === "ideas" && (
           <div className="page-section">
             <PageHeading eyebrow="Ideas" title="Find a useful idea to test." description="Generate a slate, try examples, or add your own. You can edit everything before choosing one to evaluate." />
+            {quickRunPhase === "choose-idea" && <div className="quick-run-checkpoint"><strong>Quick Run checkpoint · Choose the direction</strong><span>{quickRunMessage}</span><button className="text-button" onClick={exitQuickRun}>Use manual flow</button></div>}
             <div className="idea-start-card">
               <div>
                 <p className="eyebrow">Choose a starting point</p>
@@ -1568,7 +2014,7 @@ export default function Home() {
                   const priority = calculateGenerationPriority(state.profile, idea.scores);
                   return (
                     <article className="idea-card" key={idea.id}>
-                      <div className="idea-rank"><span>#{String(index + 1).padStart(2, "0")}</span><strong>{priority}</strong><small>search priority</small></div>
+                      <div className="idea-rank"><span>#{String(index + 1).padStart(2, "0")}</span><strong>{priority}</strong><small>{quickRunPhase === "choose-idea" && index === 0 ? "top exploration match" : "search priority"}</small></div>
                       <div className="idea-body">
                         <div className="idea-title-row">
                           <input value={idea.title} aria-label="Idea title" onChange={(event) => updateIdea(idea.id, { title: event.target.value })} />
@@ -1599,7 +2045,7 @@ export default function Home() {
                         </details>
                         <div className="idea-actions">
                           <span>Idea ranking only{idea.source ? ` · AI draft from ${idea.source.model}` : ""}</span>
-                          <button className="button small primary" onClick={() => beginReview(idea)}>Evaluate this idea</button>
+                          <button className="button small primary" onClick={() => beginReview(idea)}>{quickRunPhase === "choose-idea" ? "Choose & continue" : "Evaluate this idea"}</button>
                         </div>
                       </div>
                     </article>
@@ -1638,14 +2084,15 @@ export default function Home() {
                       <button
                         key={provider}
                         className={llmConfig.provider === provider ? "active" : ""}
+                        disabled={modelEditorLocked}
                         onClick={() => {
                           if (modelSearchTimerRef.current !== null) window.clearTimeout(modelSearchTimerRef.current);
                           modelSearchRequestRef.current += 1;
-                          setLlmConfig({ provider, baseUrl: LLM_PROVIDERS[provider].defaultUrl, model: "", hasApiKey: false });
-                          setLlmApiKey("");
-                          setClearLlmApiKey(false);
+                          beginModelEditorChange({ clearRawKey: true, clearCatalog: true });
+                          const nextConfig = editorConfigForProvider(provider, persistedLlmConfig);
+                          setLlmConfig(nextConfig);
                           setLlmModels([]);
-                          setModelSearch("");
+                          setModelSearch(nextConfig.model);
                           setModelSearchBusy(false);
                           setModelPickerOpen(false);
                           setModelListError("");
@@ -1669,9 +2116,11 @@ export default function Home() {
                         autoComplete="off"
                         required={selectedLlmProvider.keyRequired}
                         aria-required={selectedLlmProvider.keyRequired}
+                        disabled={modelEditorLocked}
                         value={llmApiKey}
-                        placeholder={llmConfig.hasApiKey ? "A protected key is already saved" : selectedLlmProvider.keyRequired ? "Paste your OpenRouter API key" : "Leave blank if this endpoint needs no key"}
+                        placeholder={llmSavedKeyAvailable ? "A protected key is already saved" : selectedLlmProvider.keyRequired ? "Paste your OpenRouter API key" : "Leave blank if this endpoint needs no key"}
                         onChange={(event) => {
+                          beginModelEditorChange();
                           const nextKey = event.target.value;
                           setLlmApiKey(nextKey);
                           setClearLlmApiKey(false);
@@ -1689,10 +2138,12 @@ export default function Home() {
                           aria-expanded={modelPickerOpen}
                           aria-autocomplete="list"
                           aria-activedescendant={modelPickerOpen && displayedModels[modelActiveIndex] ? `model-option-${modelActiveIndex}` : undefined}
+                          disabled={modelEditorLocked}
                           value={modelSearch}
                           placeholder={llmConfig.provider === "openrouter" ? "Type 4.8, Opus, Sonnet, Llama…" : "Type a name, version, or model ID"}
                           onFocus={openModelPicker}
                           onChange={(event) => {
+                            beginModelEditorChange();
                             setLlmConfig((current) => ({ ...current, model: "" }));
                             queueModelSearch(event.target.value);
                           }}
@@ -1750,7 +2201,7 @@ export default function Home() {
                           {visibleModels.length > displayedModels.length && <div className="model-result-limit">Showing the best {displayedModels.length} matches. Keep typing to narrow the list.</div>}
                         </div>
                       )}
-                      {llmConfig.model && <div className="selected-model"><span>Selected</span><strong>{llmConfig.model}</strong><button aria-label="Clear selected model" onClick={() => { setLlmConfig((current) => ({ ...current, model: "" })); setModelSearch(""); setModelPickerOpen(true); }}>×</button></div>}
+                      {llmConfig.model && <div className="selected-model"><span>Selected</span><strong>{llmConfig.model}</strong><button aria-label="Clear selected model" disabled={modelEditorLocked} onClick={() => { beginModelEditorChange(); setLlmConfig((current) => ({ ...current, model: "" })); setModelSearch(""); setModelPickerOpen(true); }}>×</button></div>}
                     </div>
                     <label className="idea-count-field">
                       <span>Ideas to generate</span>
@@ -1762,30 +2213,30 @@ export default function Home() {
                     <div className="model-field-grid">
                       <label className="full-field">
                         <span>Base URL</span>
-                        <input value={llmConfig.baseUrl} spellCheck={false} readOnly={selectedLlmProvider.lockedEndpoint} aria-readonly={selectedLlmProvider.lockedEndpoint} onChange={(event) => setLlmConfig((current) => ({ ...current, baseUrl: event.target.value }))} />
+                        <input value={llmConfig.baseUrl} spellCheck={false} disabled={modelEditorLocked} readOnly={selectedLlmProvider.lockedEndpoint} aria-readonly={selectedLlmProvider.lockedEndpoint} onChange={(event) => { beginModelEditorChange({ clearRawKey: true, clearCatalog: true }); setLlmConfig((current) => ({ ...current, baseUrl: event.target.value, hasApiKey: false })); }} />
                       </label>
                       <label className="full-field manual-model-field">
                         <span>Exact model ID</span>
-                        <input value={llmConfig.model} placeholder="Choose above or enter an ID manually" onChange={(event) => { setLlmConfig((current) => ({ ...current, model: event.target.value })); setModelSearch(event.target.value); }} />
+                        <input value={llmConfig.model} disabled={modelEditorLocked} placeholder="Choose above or enter an ID manually" onChange={(event) => { beginModelEditorChange(); setLlmConfig((current) => ({ ...current, model: event.target.value })); setModelSearch(event.target.value); }} />
                         <small>Use this when an endpoint cannot list its models.</small>
                       </label>
                     </div>
-                    {llmConfig.hasApiKey && (selectedLlmProvider.keyRequired ? (
+                    {llmSavedKeyAvailable && (selectedLlmProvider.keyRequired ? (
                       <p className="required-key-note">Paste a new key above to replace the protected key already saved on this computer.</p>
                     ) : (
-                      <label className="check-field clear-key-field"><input type="checkbox" checked={clearLlmApiKey} onChange={(event) => setClearLlmApiKey(event.target.checked)} /><span>Remove the saved API key</span></label>
+                      <label className="check-field clear-key-field"><input type="checkbox" disabled={modelEditorLocked} checked={clearLlmApiKey} onChange={(event) => { beginModelEditorChange(); setClearLlmApiKey(event.target.checked); }} /><span>Remove the saved API key</span></label>
                     ))}
                   </details>
                   <div className="model-actions">
-                    <button className="button secondary" disabled={llmBusy !== null || modelSearchBusy} onClick={refreshLlmModels}>{llmBusy === "models" ? "Reading models…" : "Browse all models"}</button>
-                    <button className="button primary" disabled={llmBusy !== null || !llmReady} onClick={() => void connectLlm()}>{llmBusy === "saving" ? "Connecting…" : "Save & connect"}</button>
+                    <button className="button secondary" disabled={modelEditorLocked || llmBusy !== null || modelSearchBusy} onClick={refreshLlmModels}>{llmBusy === "models" ? "Reading models…" : "Browse all models"}</button>
+                    <button className="button primary" disabled={modelEditorLocked || llmBusy !== null || !llmReady} onClick={() => void connectLlm()}>{llmBusy === "saving" ? "Connecting…" : "Save & connect"}</button>
                   </div>
                   {llmMessage && <div className={`connector-message ${llmMessageTone}`} role="status">{llmMessage}</div>}
                 </section>
 
                 <section className="model-generation-card">
                   <div><p className="eyebrow">Next step</p><h2>Generate an editable idea slate</h2><p>Your project boundary and optional profile are included. Cloud providers receive that selected context.</p></div>
-                  <button className="button primary" disabled={generatingIdeas || !llmReady} onClick={generateWithConnectedLlm}>{generatingIdeas ? "Generating…" : `Generate ${ideaCount} ideas`}</button>
+                  <button className="button primary" disabled={clearingLocalData || generatingIdeas || !llmReady} onClick={generateWithConnectedLlm}>{generatingIdeas ? "Generating…" : `Generate ${ideaCount} ideas`}</button>
                 </section>
               </>
             )}
@@ -1860,10 +2311,12 @@ export default function Home() {
                 <div className="ai-draft-panel">
                   <div className="ai-draft-summary">
                     <div><strong>Provisional draft</strong><span>{evaluationDraft.result.provider} · {evaluationDraft.result.model} · {new Date(evaluationDraft.createdAt).toLocaleString()}</span></div>
-                    <span>{evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit !== null).length} rated · {evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit === null).length} left unknown</span>
+                    <span>{evaluationDraft.result.claims.length > 0
+                      ? `${evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit !== null).length} rated · ${evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit === null).length} left unknown`
+                      : `${evaluationDraft.result.gates.length} gate drafts refreshed`}</span>
                   </div>
                   {evaluationDraft.contextFingerprint !== evaluationContextFingerprint && <div className="ai-stale-warning" role="status"><strong>Draft out of date.</strong><span>The idea, review setup, notes, or supplied excerpts changed. Generate a fresh draft before applying anything.</span></div>}
-                  <details className="ai-review-queue" open>
+                  {evaluationDraft.result.claims.length > 0 && <details className="ai-review-queue" open>
                     <summary>Review claim recommendations</summary>
                     <div className="ai-queue-toolbar"><span>No recommendations are selected automatically.</span><div><button className="text-button" disabled={evaluationDraft.contextFingerprint !== evaluationContextFingerprint} onClick={() => setSelectedEvaluationClaims(evaluationDraft.result.claims.filter((proposal) => proposal.suggestedMerit !== null && state.review.claims.find((claim) => claim.claimId === proposal.claimId)?.merit === null).map((proposal) => proposal.claimId))}>Select rated drafts</button><button className="text-button" onClick={() => setSelectedEvaluationClaims([])}>Clear</button></div></div>
                     <div className="ai-proposal-list">
@@ -1881,7 +2334,7 @@ export default function Home() {
                       })}
                     </div>
                     <div className="ai-apply-row"><span>Only merit and an audit note will change. Grades, evidence links, weights, and gates remain untouched.</span><button className="button primary" disabled={selectedEvaluationClaims.length === 0 || evaluationDraft.contextFingerprint !== evaluationContextFingerprint} onClick={applySelectedEvaluation}>Apply {selectedEvaluationClaims.length || "selected"}</button></div>
-                  </details>
+                  </details>}
 
                   <details className="ai-review-queue gate-drafts">
                     <summary>Review gate recommendations one at a time</summary>
@@ -2180,7 +2633,45 @@ function IssueList({ title, items, tone }: { title: string; items: string[]; ton
   return <section className={`issue-list ${tone}`}><div><span aria-hidden="true">{tone === "error" ? "×" : tone === "warning" ? "!" : "i"}</span><h3>{title}</h3><small>{items.length}</small></div><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></section>;
 }
 
-function Overview({ state, score, selectedIdea, onNavigate, onUpdateProject }: { state: AppState; score: ReturnType<typeof scoreReview>; selectedIdea?: IdeaCandidate; onNavigate: (section: Section) => void; onUpdateProject: (patch: Partial<ProjectDetails>) => void }) {
+function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, onExit }: {
+  phase: QuickRunPhase;
+  message: string;
+  hasEvidence: boolean;
+  remoteModel: boolean;
+  onContinue: () => void;
+  onExit: () => void;
+}) {
+  const steps = ["Idea", "Evaluation", "Evidence", "Gates", "Decision"];
+  const activeIndex = phase === "generating" || phase === "choose-idea" ? 0
+    : phase === "drafting-evaluation" || phase === "approve-evaluation" ? 1
+      : phase === "evidence" ? 2
+        : phase === "refreshing-gates" || phase === "approve-gates" ? 3
+          : 4;
+  const continueLabel = phase === "choose-idea" ? "Choose an idea"
+    : phase === "approve-evaluation" ? "Continue without applying"
+      : phase === "evidence" ? remoteModel ? "Send & refresh gates" : hasEvidence ? "Continue with current evidence" : "Continue evidence-free"
+        : phase === "approve-gates" ? "See deterministic decision"
+          : phase === "decision" ? "Open decision" : "";
+  return (
+    <section className="quick-run-guide" aria-label="Quick Run progress">
+      <div className="quick-run-guide-copy"><span>Quick Run</span><strong>{message}</strong><small>{remoteModel ? "Cloud model: each AI step confirms before project or evidence context is sent." : "Local model: AI context stays on this computer."}</small></div>
+      <ol>{steps.map((step, index) => <li className={index < activeIndex ? "done" : index === activeIndex ? "active" : ""} key={step}><i>{index < activeIndex ? "✓" : index + 1}</i><span>{step}</span></li>)}</ol>
+      <div>{continueLabel && <button className="button small primary" onClick={onContinue}>{continueLabel}</button>}<button className="text-button" onClick={onExit}>Exit</button></div>
+    </section>
+  );
+}
+
+function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quickRunBusy, onQuickRun, onNavigate, onUpdateProject }: {
+  state: AppState;
+  score: ReturnType<typeof scoreReview>;
+  selectedIdea?: IdeaCandidate;
+  desktopAvailable: boolean;
+  llmReady: boolean;
+  quickRunBusy: boolean;
+  onQuickRun: () => void;
+  onNavigate: (section: Section) => void;
+  onUpdateProject: (patch: Partial<ProjectDetails>) => void;
+}) {
   const steps = [
     { id: "ideas" as const, number: "01", title: "Find & choose an idea", meta: selectedIdea ? "Idea chosen" : `${state.ideas.length} ideas`, done: Boolean(selectedIdea) },
     { id: "review" as const, number: "02", title: "Evaluate what must be true", meta: `${score.assessedClaims}/${score.totalClaims} answered`, done: score.assessedClaims === score.totalClaims },
@@ -2190,6 +2681,10 @@ function Overview({ state, score, selectedIdea, onNavigate, onUpdateProject }: {
   return (
     <div className="page-section overview-page">
       <PageHeading eyebrow="Your project" title="Forge better ideas. Prove what holds." description="Move from a blank page to a clear decision without mixing personal preference, AI suggestions, and real evidence." />
+      <section className="quick-run-launch">
+        <div><span className="quick-run-kicker">Optional guided automation</span><h2>Run the whole workflow with fewer clicks</h2><p>Quick Run generates ideas when needed, drafts the evaluation, organizes sources you provide, refreshes gates, and opens the deterministic decision. It pauses whenever only you can honestly approve something.</p><small>Idea → Evaluation → Evidence → Gates → Decision · Cloud models confirm before context is sent</small></div>
+        <div><strong>AI drafts. You approve.</strong><button className="button primary" disabled={quickRunBusy} onClick={onQuickRun}>{quickRunBusy ? "Quick Run working…" : desktopAvailable && llmReady ? "Start Quick Run" : desktopAvailable ? "Connect model to start" : "Open model options"}</button></div>
+      </section>
       <div className="overview-grid">
         <section className="overview-main">
           <div className="setup-card">

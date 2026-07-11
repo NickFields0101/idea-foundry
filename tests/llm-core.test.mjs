@@ -379,6 +379,35 @@ test("drafts evaluation proposals without mutating review inputs or accepting ha
   assert.doesNotMatch(JSON.stringify(result), /evaluation-secret|99Z|G99|evidenceGrade|weighted|reviewerVerified/);
 });
 
+test("gate-only refresh returns no claim proposals after evidence changes", async () => {
+  let requestBody;
+  const result = await draftEvaluation(
+    { provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "local-reviewer" },
+    { projectContext: "Current evidence excerpt: one operator completed the test.", claimIds: [], scope: "gates_only" },
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = JSON.parse(options.body);
+        return jsonResponse({
+          message: {
+            content: JSON.stringify({
+              claims: [{ claimId: "1A", suggestedMerit: 5, reasoning: "Must be ignored", confidence: "high", uncertainty: "" }],
+              gates: [{ gateId: "G4", suggestedStatus: "conditional", reasoning: "A prototype result exists, but architecture evidence is incomplete.", confidence: "medium", uncertainty: "Threat testing is missing." }],
+            }),
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(result.claims, []);
+  assert.deepEqual(result.gates.map(({ gateId }) => gateId), ["G4"]);
+  assert.match(requestBody.messages[0].content, /refreshes gates only/i);
+  assert.doesNotMatch(requestBody.messages[0].content, /"id":"1A"/);
+  const userMessage = JSON.parse(requestBody.messages[1].content);
+  assert.deepEqual(userMessage.requestedClaimIds, []);
+  assert.match(userMessage.task, /Return no claim proposals/);
+});
+
 test("normalizes proposal merit to half points and rejects noncanonical requested claim IDs before a request", async () => {
   const normalized = normalizeEvaluationProposals({
     claims: [
