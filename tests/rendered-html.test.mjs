@@ -14,20 +14,25 @@ async function render() {
   );
 }
 
-test("server-renders the completed Idea Foundry landing page", async () => {
+test("server-renders the completed SIFT landing page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Find the idea worth disproving \| Idea Foundry — Xahau \+ Evernode<\/title>/i);
-  assert.match(html, /Find the idea worth disproving\./);
-  assert.match(html, /Turn a blank page into useful ideas/i);
-  assert.match(html, /Start a project/);
-  assert.match(html, /Personalize my ideas/);
+  assert.match(html, /<title>Find what holds \| SIFT<\/title>/i);
+  assert.match(html, /Find what holds\./);
+  assert.match(html, /Generate ideas, challenge assumptions/i);
+  assert.match(html, /Start with AI/);
+  assert.match(html, /Start manually/);
+  assert.match(html, /Personalize ideas/);
   assert.match(html, /I already have an idea/);
-  assert.match(html, /No account · Saved on this device/);
-  assert.match(html, /idea-foundry-logo/i);
+  assert.match(html, /No account · Deterministic scoring/);
+  assert.match(html, /Use light mode/);
+  assert.match(html, /data-theme="dark"/i);
+  assert.match(html, /sift-brand-tornado\.png/i);
+  assert.match(html, /sift-wordmark-light\.png/i);
+  assert.match(html, /sift-hero\.png/i);
   assert.match(html, /og\.png/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -48,8 +53,12 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   assert.match(page, /queueModelSearch/);
   assert.match(page, /Type 4\.8, Opus, Sonnet, Llama/);
   assert.match(page, /scoreReview\(state\.review\)/);
+  assert.match(page, /Turn the winner into a working project/);
+  assert.match(page, /bridge\.run\(\{ toolId, capability, arguments: args \}\)/);
+  assert.match(page, /className="current-thesis"[^\n]+SIFT_BRAND_TORNADO_URL/);
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);
+  assert.match(layout, /sift-theme-v1/);
   assert.match(layout, /images:\s*\["\/og\.png"\]/);
   assert.match(scoring, /v3-powershell-parity\/1\.0\.2/);
   assert.match(scoring, /numericAndGateEligible/);

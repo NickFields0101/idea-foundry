@@ -12,10 +12,11 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const productName = "Idea Foundry — Xahau + Evernode";
-const title = `Find the idea worth disproving | ${productName}`;
+const productName = "SIFT — Xahau + Evernode";
+const title = `Find what holds | SIFT`;
 const description =
-  "Generate and review Xahau and Evernode ideas with deterministic 51-claim scoring, evidence validation, non-compensable gates, and local-first privacy.";
+  "Generate, challenge, and review Xahau and Evernode ideas with deterministic scoring, evidence validation, and local-first privacy.";
+const themeBootstrap = `(function(){try{var t=localStorage.getItem("sift-theme-v1");if(t!=="light"&&t!=="dark")t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){document.documentElement.dataset.theme="dark"}})()`;
 const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
 const metadataBase = new URL(
   configuredSiteUrl ||
@@ -37,7 +38,7 @@ export const metadata: Metadata = {
         url: "/og.png",
         width: 1731,
         height: 909,
-        alt: `${productName} — Find the idea worth disproving`,
+        alt: `${productName} — Find what holds`,
       },
     ],
   },
@@ -55,7 +56,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /></head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

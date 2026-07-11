@@ -7,7 +7,7 @@ import { Arch, Platform, build } from "electron-builder";
 
 const projectDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseDirectory = path.join(projectDirectory, "release");
-const temporaryDirectory = path.join(os.tmpdir(), `idea-foundry-electron-build-${process.pid}-${Date.now()}`);
+const temporaryDirectory = path.join(os.tmpdir(), `sift-electron-build-${process.pid}-${Date.now()}`);
 
 function readOption(name) {
   const exact = `--${name}`;
@@ -55,9 +55,9 @@ const targets = requestedPlatform === "mac"
 
 function isDeliverable(name) {
   if (requestedPlatform === "mac") {
-    return /^Idea-Foundry-.+-macOS-(?:x64|arm64)\.(?:dmg|zip)(?:\.blockmap)?$/i.test(name);
+    return /^SIFT-.+-macOS-(?:x64|arm64)\.(?:dmg|zip)(?:\.blockmap)?$/i.test(name);
   }
-  return /^Idea-Foundry-(?:Setup|Portable)-.+\.(?:exe|blockmap)$/i.test(name);
+  return /^SIFT-(?:Setup|Portable)-.+\.(?:exe|blockmap)$/i.test(name);
 }
 
 function assertDeliverables(generated) {

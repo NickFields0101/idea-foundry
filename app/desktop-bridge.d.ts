@@ -127,6 +127,52 @@ export interface ExtractEvidenceResult {
   provisional: true;
 }
 
+export interface ResearchEvidenceInput extends LlmConnectionOptions {
+  /** User-visible selected idea and project context. Sent to OpenRouter for public web research. */
+  projectContext: string;
+  /** Optional canonical rubric claim IDs to research. Omit to use the complete catalog. */
+  claimIds?: string[];
+  /** Bounded to 3-10 public sources by the desktop main process. */
+  maxSources?: number;
+}
+
+export interface ResearchCitation {
+  sourceId: string;
+  url: string;
+  title: string;
+  /** Provider-supplied extractive excerpt. Kept transiently until evidence is approved. */
+  content: string;
+  contentSha256: string;
+}
+
+export interface ResearchEvidenceProposal {
+  title: string;
+  sourceId: string;
+  sourceUrl: string;
+  sourceTitle: string;
+  sourceExcerpt: string;
+  claimIds: string[];
+  suggestedType: "DeskResearch";
+  suggestedGrade: "E1";
+  direction: "supports" | "contradicts";
+  verificationStatus: "provider_excerpt";
+  reasoning: string;
+  confidence: AiProposalConfidence;
+  uncertainty: string;
+  reviewerVerified: false;
+}
+
+export interface ResearchEvidenceResult {
+  evidence: ResearchEvidenceProposal[];
+  citations: ResearchCitation[];
+  provider: "openrouter";
+  model: string;
+  researchEngine: "exa";
+  researchedAt: string;
+  webSearchRequests: number;
+  provisional: true;
+}
+
 export interface NormalizedIdeaScores {
   personalFit: number | null;
   opportunitySignal: number;
@@ -156,10 +202,69 @@ export interface GeneratedIdeasResult {
   model: string;
 }
 
+export type BuildToolId = "evernode-mcp" | "xahau-mcp" | "xahc" | "xahc-prover";
+
+export type BuildCapability =
+  | "list_templates"
+  | "generate_contract"
+  | "check_determinism"
+  | "check_contract_api"
+  | "recommend_pattern"
+  | "check_hook_compat"
+  | "generate_settlement"
+  | "estimate_lease_cost"
+  | "recommend_hosts"
+  | "host_diagnostics"
+  | "generate_deploy_commands"
+  | "explain_error"
+  | "scaffold_hook"
+  | "analyze_hook"
+  | "hook_report"
+  | "doctor";
+
+export interface BuildCatalogEntry {
+  id: BuildToolId;
+  label: string;
+  summary: string;
+  kind: "mcp" | "cli" | "companion";
+  repositoryUrl: string;
+  installUrl: string;
+  capabilities: BuildCapability[];
+  safety: string;
+  platformNote?: string;
+}
+
+export interface BuildToolStatus {
+  id: BuildToolId;
+  available: boolean;
+  runnable: boolean;
+  support: "supported" | "custom" | "unsupported";
+  version?: string;
+  message: string;
+}
+
+export interface BuildRunInput {
+  toolId: BuildToolId;
+  capability: BuildCapability;
+  /** Bounded JSON data validated again against the selected operation in the main process. */
+  arguments?: Record<string, unknown>;
+}
+
+export interface BuildRunResult {
+  toolId: BuildToolId;
+  capability: BuildCapability;
+  output: unknown;
+  durationMs: number;
+  truncated: boolean;
+  advisory: true;
+}
+
 export interface IdeaFoundryBridge {
   desktop: boolean;
   app: {
     getVersion(): Promise<string>;
+    /** Opens only one of SIFT's four exact allowlisted Hugegreencandle GitHub repositories. */
+    openExternal(url: string): Promise<boolean>;
   };
   llm: {
     getConfig(): Promise<LlmConfig>;
@@ -170,6 +275,12 @@ export interface IdeaFoundryBridge {
     generateIdeas(input: GenerateIdeasInput): Promise<GeneratedIdeasResult>;
     draftEvaluation(input: DraftEvaluationInput): Promise<DraftEvaluationResult>;
     extractEvidence(input: ExtractEvidenceInput): Promise<ExtractEvidenceResult>;
+    researchEvidence(input: ResearchEvidenceInput): Promise<ResearchEvidenceResult>;
+  };
+  build: {
+    getCatalog(): Promise<BuildCatalogEntry[]>;
+    detect(): Promise<BuildToolStatus[]>;
+    run(input: BuildRunInput): Promise<BuildRunResult>;
   };
 }
 

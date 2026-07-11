@@ -1,6 +1,6 @@
-# Idea Foundry — Xahau + Evernode
+# SIFT — Xahau + Evernode
 
-Idea Foundry is a local-first, optional-AI idea-generation and evidence-review workspace for Xahau and Evernode projects. It moves a founder from a broad search profile to falsifiable candidates, helps organize a review, then calculates stage readiness with a locked 51-claim rubric.
+SIFT (formerly Idea Foundry) is a local-first, optional-AI venture workspace for Xahau and Evernode projects. It moves a founder from a broad search profile to falsifiable candidates, helps organize a review, calculates stage readiness with a locked 51-claim rubric, and carries the selected opportunity into a guarded local Build workspace.
 
 No account or ChatGPT sign-in is required in the desktop edition.
 
@@ -8,8 +8,10 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [GitHub Releases](https://github.com/NickFields0101/idea-foundry/releases/latest).
 
-- **Installer:** download `Idea-Foundry-Setup-0.5.0-x64.exe`, double-click it, choose an install folder, and launch Idea Foundry from the desktop or Start menu.
+- **Installer:** download `Idea-Foundry-Setup-0.5.0-x64.exe`, double-click it, choose an install folder, and launch the app from the desktop or Start menu.
 - **Portable:** download `Idea-Foundry-Portable-0.5.0-x64.exe` and double-click it. It runs without installing anything.
+
+Version `0.5.0` predates the visible SIFT rebrand, so its published files retain the Idea Foundry name. New packages use `SIFT-Setup-<version>-x64.exe` and `SIFT-Portable-<version>-x64.exe`.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
@@ -17,9 +19,9 @@ Version `0.5.0` is not yet code-signed, so Windows SmartScreen may display an **
 
 ## Download and install on macOS
 
-Download the latest DMG from [GitHub Releases](https://github.com/NickFields0101/idea-foundry/releases/latest). Choose `arm64` for Apple silicon Macs or `x64` for Intel Macs running macOS 12 Monterey or newer, open the DMG, and drag Idea Foundry into Applications. ZIP packages are also provided for manual deployment.
+Download the latest DMG from [GitHub Releases](https://github.com/NickFields0101/idea-foundry/releases/latest). Choose `arm64` for Apple silicon Macs or `x64` for Intel Macs running macOS 12 Monterey or newer, open the DMG, and drag the app into Applications. ZIP packages are also provided for manual deployment.
 
-The current macOS packages are unsigned and not notarized. Verify `SHA256SUMS.txt`, then right-click Idea Foundry and choose **Open** if Gatekeeper warns about an unidentified developer. Future broad distribution should use an Apple Developer ID certificate and notarization. See [macOS distribution](docs/macos-distribution.md) for build, architecture, signing, and release details.
+The current macOS packages are unsigned and not notarized. Verify `SHA256SUMS.txt`, then right-click the app and choose **Open** if Gatekeeper warns about an unidentified developer. Future broad distribution should use an Apple Developer ID certificate and notarization. See [macOS distribution](docs/macos-distribution.md) for build, architecture, signing, and release details.
 
 The app deliberately separates two questions:
 
@@ -36,7 +38,9 @@ The packaged desktop app runs locally and supports:
 - A user-selected OpenAI-compatible HTTPS endpoint, or an HTTP loopback endpoint on the same computer
 - API credentials encrypted through the operating system
 
-The renderer has no direct network authority. A narrow, isolated desktop bridge handles configuration, connection testing, model discovery, idea generation, and the optional review assistants. Local providers are restricted to loopback addresses.
+The renderer has no direct network authority. A narrow, isolated desktop bridge handles configuration, connection testing, model discovery, idea generation, optional review assistants, and bounded OpenRouter public research. Local providers are restricted to loopback addresses.
+
+The interface includes persistent light and dark modes. Theme preference is stored separately from project and model data.
 
 To connect a model:
 
@@ -52,7 +56,7 @@ Every generated item is marked as an editable AI draft. It cannot write claims, 
 
 ## Optional research-based personality profile
 
-For more relevant idea generation, a user can complete the public-domain **Johnson (2014) IPIP-NEO-120** Big Five assessment inside Idea Foundry. The 120-item questionnaire usually takes 15–20 minutes and reports five broad domains plus 30 facets. It is available as an optional alternative to entering profile preferences manually.
+For more relevant idea generation, a user can complete the public-domain **Johnson (2014) IPIP-NEO-120** Big Five assessment inside SIFT. The 120-item questionnaire usually takes 15–20 minutes and reports five broad domains plus 30 facets. It is available as an optional alternative to entering profile preferences manually.
 
 Results are shown as 0–100 **response-scale positions**, not population percentiles. They describe how the user answered this questionnaire; they do not rank the user against other people. The assessment is for self-reflection and idea personalization only. It is not a diagnosis and must not be used for hiring, employment, education, insurance, credit, healthcare, or any other consequential decision.
 
@@ -65,7 +69,7 @@ Instrument and scoring references are listed in [Third-party notices](THIRD_PART
 The two review assistants are available only in the desktop edition with a connected model. They work with local Ollama or LM Studio models and with cloud OpenRouter or OpenAI-compatible providers.
 
 - **Draft evaluation:** the model proposes merits and rationales for unanswered claims and can recommend gate outcomes. It applies nothing automatically, never supplies rubric weights, totals, or final scores, and cannot bypass validation. You choose which claim drafts to apply; gate proposals are reviewed and applied one at a time.
-- **Organize evidence:** paste the actual source material you already have, such as interview notes, test results, or a research excerpt. The model turns it into reviewable artifact proposals, and Idea Foundry locally confirms that every quoted excerpt exists in the pasted source before it can be approved. The model cannot create proof or verify its own output.
+- **Organize evidence:** paste the actual source material you already have, such as interview notes, test results, or a research excerpt. The model turns it into reviewable artifact proposals, and SIFT locally confirms that every quoted excerpt exists in the pasted source before it can be approved. The model cannot create proof or verify its own output.
 - **Human control:** evidence at E2 or above still requires an explicit human verification action, reviewer name, and conflict disclosure. Applied changes have one-click undo.
 - **Local project data:** the full pasted source is not persisted. An approved artifact keeps only its excerpt, source fingerprint, and AI provenance so the review remains auditable.
 
@@ -73,22 +77,46 @@ If you choose a cloud provider, the relevant idea, review context, or pasted evi
 
 ## Optional Quick Run
 
-Select **AI one-click preview** on the welcome screen or Home to ask a connected model to generate ideas when needed and propose values for unanswered merit claims and unresolved gates. When the user has not already selected an idea, Idea Foundry’s local profile-priority formula chooses the strongest saved exploration match. The app applies AI proposals only to an isolated copy of the review, derives an unresolved protocol route from the chosen idea’s declared Xahau/Evernode route when possible, then its locked local formula calculates a provisional outcome preview.
+Select **Start with AI** on the welcome screen or **Run preview** on Home to ask a connected model to generate ideas when needed and propose values for unanswered merit claims and unresolved gates. When the user has not already selected an idea, SIFT’s local profile-priority formula chooses the strongest saved exploration match. The app applies AI proposals only to an isolated copy of the review, derives an unresolved protocol route from the chosen idea’s declared Xahau/Evernode route when possible, then its locked local formula calculates a provisional outcome preview.
 
 The preview does not modify the live review, apply an official rating or gate decision, create evidence, or verify evidence. Existing human decisions and evidence are preserved, and missing evidence remains missing. The result is always labeled provisional; the AI proposes inputs, while the deterministic engine—not the model—calculates the displayed outcome. Users can inspect the selected idea and complete the normal evidence-backed review separately. **Guided review** remains available for people who prefer to approve each checkpoint themselves.
 
 When a cloud model is connected, Quick Run confirms before sending the operation-specific idea and review context. Local Ollama and LM Studio flows stay on the computer. A Quick Run never sends raw personality-test answers; exact derived scores are included only if the user enabled the separate personality-sharing option.
 
+## Optional Research & Run
+
+**Research & Run** is the fastest evidence-aware path. With a connected OpenRouter model, one start action can generate or select an idea, draft missing review inputs in an isolated copy, search public sources, map exact citation excerpts to a bounded set of publicly researchable rubric claims, and calculate a provisional deterministic outcome. SIFT then pauses once for one consolidated source review.
+
+The research connector uses OpenRouter's current [`openrouter:web_search` server tool](https://openrouter.ai/docs/guides/features/server-tools/web-search) with the Exa engine and fixed result/context limits. It does not use the deprecated web plugin and never fetches arbitrary citation URLs itself. A source can enter the approval packet only when OpenRouter returns an HTTPS `url_citation` annotation with nonempty provider-supplied content and the proposed excerpt occurs exactly in that content. URLs written only in model prose are ignored.
+
+Every approved public finding is forced to `DeskResearch / E1`, is marked not reviewer-verified, keeps its URL, title, retrieval time, exact excerpt, and content hash, and expires under the deterministic one-year desk-research policy. Public research cannot establish interviews, customer commitments, payments, production behavior, audits, or E2–E4 proof. Supporting records may update their linked claim to E1; contradicting records are attached but never acknowledged automatically. The live project changes only after the user checks the consolidated confirmation and selects **Add sources & calculate**. Skipping or discarding the packet leaves the live review untouched.
+
+Research & Run currently requires OpenRouter because local OpenAI-compatible chat APIs do not provide a standard attributable web-search contract. OpenRouter model-token charges and web-search charges apply; SIFT shows this boundary before starting. The public research brief excludes personality scores, wallet data, stored customer identities, and private evidence bodies. Existing evidence excerpts may still be sent to the connected model for the separate evaluation-draft step when the user runs research against an already selected review, and the confirmation states that explicitly.
+
+## Guarded local Build workspace
+
+After choosing an idea, open **Build** to export an evidence-aware build brief and inspect the local Xahau/Evernode toolchain. The desktop edition integrates these upstream tools through a narrow main-process bridge:
+
+- [Evernode MCP](https://github.com/Hugegreencandle/evernode-mcp) for advisory contract patterns and validation
+- [Xahau MCP](https://github.com/Hugegreencandle/xahau-mcp) for confirmed Hook starters and bounded WASM inspection
+- [XAHC](https://github.com/Hugegreencandle/xahc) for a fixed environment-doctor check in this release
+- [XAHC Prover](https://github.com/Hugegreencandle/xahc-prover) as a detected, status-only companion while the pinned proof runner is hardened
+
+The tools are installed separately; SIFT never downloads or updates them automatically. MCP calls use local stdio, not an exposed HTTP service. The renderer cannot supply a command, executable, path, working directory, shell, or timeout. Xahau starter inputs are strictly enumerated; generated source, files, and command examples are advisory output and are never executed automatically. SIFT does not accept signing secrets, sign transactions, submit transactions, spend funds, acquire leases, or deploy.
+
+Upstream XAHC releases currently cover macOS arm64 and Linux x86_64; Windows requires a custom source-built toolchain. SIFT reports that limitation rather than claiming unsupported execution.
+
 ## Use the framework
 
-1. Select **Start a project**, **Personalize my ideas**, or **I already have an idea**.
+1. Select **Start with AI**, **Start manually**, **Personalize ideas**, or **I already have an idea**.
 2. Generate ideas with a connected model, add your own, try the examples, or copy the prompt into any LLM.
-3. Choose one idea, use the optional AI one-click preview, or continue through Guided review. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
+3. Choose one idea, use **Research & Run** for a cited provisional outcome, use **Preview only** for an evidence-free shadow calculation, or continue through Guided review. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
 4. Open **Evaluate**, choose the target stage and archetype, and assess all 51 atomic claims with merit from 0–5. In the desktop app, you may ask the connected model to draft unanswered claim merits and gate recommendations, then approve only the useful proposals.
-5. Open **Evidence**, attach proof manually or use the desktop evidence organizer with pasted source text, and assign E0–E4. The validator checks type ceilings, dates, verification, claim links, duplicates, and counterevidence.
+5. Open **Evidence**, attach proof manually, use the desktop organizer with pasted source text, or select **Find public evidence** to enter Research & Run. Public findings stay E1; the validator checks type ceilings, dates, verification, claim links, duplicates, and counterevidence.
 6. Resolve the eight non-compensable gates.
 7. Open **Decision** to read the four separate outputs and every active cap, floor, validation error, and blocker.
-8. Use **Settings & data → Import & export** for a reproducible JSON packet or claim-level CSV.
+8. Open **Build** to export the reviewed build brief, inspect local tool readiness, and create a guarded starter artifact.
+9. Use **Settings & data → Import & export** for a reproducible JSON packet or claim-level CSV.
 
 ## Scoring integrity
 
@@ -104,7 +132,7 @@ When a cloud model is connected, Quick Run confirms before sending the operation
 
 ## Privacy model
 
-- No Idea Foundry account is required. OpenRouter and other remote services may require their own accounts and billing.
+- No SIFT account is required. OpenRouter and other remote services may require their own accounts and billing.
 - Projects are stored locally on the current device.
 - There is no analytics, wallet connection, hosted project database, or automatic upload.
 - Private profile data is excluded from exports by default.
@@ -114,6 +142,8 @@ When a cloud model is connected, Quick Run confirms before sending the operation
 - API credentials are never stored in project JSON or browser storage.
 - Evaluation and evidence AI drafts remain staged until the user explicitly applies them; each application can be undone in one click.
 - An AI one-click outcome is calculated in an isolated shadow review, remains provisional, and cannot overwrite the live review or create or verify evidence.
+- Research & Run accepts only exact provider-returned citation excerpts, keeps public findings at DeskResearch/E1, and commits the complete packet atomically only after one consolidated confirmation.
+- Public research sends a public-safe idea brief to OpenRouter, the selected upstream model provider, and OpenRouter's configured Exa search service. It never sends raw personality answers, wallet material, or the full local evidence ledger to the search step.
 - The evidence organizer does not persist the full pasted source. Approved artifacts retain only the accepted excerpt, source fingerprint, and model provenance.
 - Ollama and LM Studio are forced to localhost in their named connector modes.
 - OpenRouter is pinned to its official HTTPS API URL so its key cannot be redirected to another host.
@@ -163,26 +193,30 @@ npm test
 - `app/page.tsx` — shared web/desktop workflow and model-connection UI
 - `app/lib/model-search.ts` — punctuation-tolerant local model ranking and filtering
 - `app/lib/scoring.ts` — deterministic validator and scoring engine
+- `app/lib/research-run.ts` — atomic cited-evidence validation, E1 enforcement, and shadow-preview integration
 - `app/lib/rubric.json` — canonical 51-row rubric manifest
 - `desktop/main.mjs` — isolated Electron main process and secure configuration store
 - `desktop/preload.cjs` — narrow allowlisted renderer bridge
 - `desktop/llm-core.mjs` — provider-neutral connector, validation, and output normalization
+- `desktop/build-tools.mjs` — fixed local-tool catalog, detection, validation, and bounded MCP/CLI adapters
 - `desktop/renderer/` — local desktop entry point with strict content security policy
 - `tests/scoring.test.ts` — parity, caps, evidence, privacy-invariance, and determinism fixtures
 - `tests/model-search.test.ts` — model version, punctuation, provider, and stable-rank fixtures
 - `tests/llm-core.test.mjs` — mocked provider and failure-mode fixtures
+- `tests/research-run.test.ts` — citation tamper checks, E1 ceilings, atomic approval, and counterevidence invariants
+- `tests/build-tools.test.mjs` — tool allowlists, schema bounds, detection, and stdio transport fixtures
 - `tests/desktop-security.test.mjs` — authority-boundary and AI-write invariants
 
 ## Brand assets
 
-- `public/brand/idea-foundry-logo.png` — wide landing-page wordmark
-- `public/brand/idea-foundry-icon.png` — square UI and icon reference
-- `public/brand/idea-foundry-mark-transparent.png` — large decorative mark
+- `public/brand/sift-mark.svg` — scalable transparent tornado mark
+- `public/brand/sift-mark.png` — raster fallback for the mark
 - `app/icon.png` and `app/apple-icon.png` — web metadata icons
 - `build/icon.png` — Electron icon master for Windows and macOS conversion
 - `public/og.png` — social preview image
+- `npm run brand:render` — rebuilds all raster assets from the SVG mark
 
-Unless otherwise noted, repository assets are distributed under the repository's MIT license. Idea Foundry is an independent open-source project and is not an official Xahau or Evernode product; names and marks belonging to third parties remain their respective owners.
+Unless otherwise noted, repository assets are distributed under the repository's MIT license. SIFT is an independent open-source project and is not an official Xahau or Evernode product; names and marks belonging to third parties remain their respective owners.
 
 The optional IPIP-NEO-120 personality assessment is a public-domain instrument and is documented separately in [Third-party notices](THIRD_PARTY_NOTICES.md).
 

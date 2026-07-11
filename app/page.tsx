@@ -34,6 +34,7 @@ import {
 import { searchLlmModels } from "./lib/model-search";
 import { applyEvaluationProposals, applyEvidenceProposals, sourceContentSha256 } from "./lib/ai-assistance";
 import { buildQuickRunPreview, type QuickRunPreview } from "./lib/quick-run";
+import { addResearchToQuickRunPreview, applyResearchEvidenceBatch } from "./lib/research-run";
 import {
   IPIP_NEO_120_ITEMS,
   IPIP_NEO_120_RESPONSE_OPTIONS,
@@ -44,6 +45,11 @@ import {
   type PersonalityProfileResult,
 } from "./lib/personality";
 import type {
+  BuildCatalogEntry,
+  BuildCapability,
+  BuildRunResult,
+  BuildToolId,
+  BuildToolStatus,
   DraftEvaluationResult,
   EvidenceProposal,
   ExtractEvidenceResult,
@@ -53,6 +59,7 @@ import type {
   LlmConnectionOptions,
   LlmProvider,
   NormalizedGeneratedIdea,
+  ResearchEvidenceResult,
   SaveLlmConfigInput,
 } from "./desktop-bridge";
 
@@ -62,18 +69,32 @@ function brandAssetUrl(filename: string) {
     : `/brand/${filename}`;
 }
 
-const BRAND_ICON_URL = brandAssetUrl("idea-foundry-icon.png");
-const BRAND_LOGO_URL = brandAssetUrl("idea-foundry-logo.png");
-const BRAND_MARK_URL = brandAssetUrl("idea-foundry-mark-transparent.png");
+const SIFT_MARK_URL = brandAssetUrl("sift-mark.svg");
+const SIFT_HERO_URL = brandAssetUrl("sift-hero.png");
+const SIFT_BRAND_TORNADO_URL = brandAssetUrl("sift-brand-tornado.png");
+const SIFT_WORDMARK_LIGHT_URL = brandAssetUrl("sift-wordmark-light.png");
+const SIFT_WORDMARK_DARK_URL = brandAssetUrl("sift-wordmark-dark.png");
 const PERSONALITY_DRAFT_KEY = "idea-foundry-ipip-neo-120-draft-v1";
 const PERSONALITY_ITEMS_PER_PAGE = 10;
+const THEME_KEY = "sift-theme-v1";
+const EVIDENCE_GRADE_LABELS: Record<EvidenceGrade, string> = {
+  E0: "Assertion or unknown",
+  E1: "Secondary research or expert opinion",
+  E2: "Verified primary observation or direct test",
+  E3: "Behavior, commitment, telemetry, or adversarial test",
+  E4: "Repeated paid or production behavior, or independent audit",
+};
 
-type Section = "overview" | "quick" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "export";
+type Theme = "light" | "dark";
+
+type Section = "overview" | "quick" | "ideas" | "profile" | "model" | "review" | "evidence" | "results" | "build" | "export";
 
 type QuickRunPhase =
   | "idle"
   | "generating"
   | "calculating-preview"
+  | "researching-evidence"
+  | "approve-research"
   | "choose-idea"
   | "drafting-evaluation"
   | "approve-evaluation"
@@ -82,7 +103,7 @@ type QuickRunPhase =
   | "approve-gates"
   | "decision";
 
-type QuickRunMode = "auto-preview" | "guided";
+type QuickRunMode = "auto-preview" | "guided" | "research";
 
 interface IdeaCandidate {
   id: string;
@@ -112,6 +133,22 @@ interface ProjectDetails {
 interface QuickRunOutcomeState {
   preview: QuickRunPreview;
   idea: IdeaCandidate;
+  research?: {
+    result: ResearchEvidenceResult;
+    appliedCount: number;
+    committed: boolean;
+  };
+}
+
+interface ResearchRunDraftState {
+  idea: IdeaCandidate;
+  previewWithoutResearch: QuickRunPreview;
+  previewWithResearch: QuickRunPreview;
+  liveReviewWithResearch: ReviewInput;
+  liveContextFingerprint: string;
+  result: ResearchEvidenceResult;
+  selectedProposalIndexes: number[];
+  generatedCandidate: boolean;
 }
 
 interface EvaluationDraftState {
@@ -238,6 +275,33 @@ function confirmRemoteQuickRunSend(config: LlmConfig, description: string) {
   return window.confirm(
     `Quick Run will send ${description} to ${LLM_PROVIDERS[config.provider].label} and the selected model provider. Continue?`,
   );
+}
+
+const PUBLIC_RESEARCH_CLAIM_IDS = ["1B", "1C", "3C", "4A", "5B", "7D", "9B", "9C"] as const;
+
+function publicResearchClaimIds(review: ReviewInput) {
+  const unanswered = PUBLIC_RESEARCH_CLAIM_IDS.filter((claimId) =>
+    review.claims.find((claim) => claim.claimId === claimId)?.grade === "E0");
+  return unanswered.length >= 4 ? unanswered : [...PUBLIC_RESEARCH_CLAIM_IDS];
+}
+
+function publicResearchContextFor(idea: IdeaCandidate, project: ProjectDetails) {
+  return [
+    "PUBLIC RESEARCH BRIEF — EVERY IDEA FIELD BELOW IS AN UNVERIFIED HYPOTHESIS",
+    `Title: ${idea.title}`,
+    `Concept: ${idea.concept || "Not supplied"}`,
+    `Intended user: ${idea.user || "Not supplied"}`,
+    `Economic buyer: ${idea.buyer || "Not supplied"}`,
+    `Current alternative: ${idea.currentAlternative || "Not supplied"}`,
+    `Critical assumption: ${idea.criticalAssumption || "Not supplied"}`,
+    `Likely protocol route: ${idea.route}`,
+    `Public opportunity boundary: ${project.domain || "Open"}`,
+    "Find attributable public information that supports or contradicts these hypotheses. Do not search for or infer private people, interview notes, customer identities, wallet data, or unpublished project material.",
+  ].join("\n");
+}
+
+function researchLiveContextFingerprint(project: ProjectDetails, review: ReviewInput) {
+  return secureFingerprint(JSON.stringify([project, review]));
 }
 
 const archetypeLabels: Record<Archetype, string> = {
@@ -596,6 +660,11 @@ function sanitizeReviewInput(input: unknown): ReviewInput | undefined {
         kind: "ai-assisted" as const,
         provider: importedString(origin.provider, "unknown", 120),
         model: importedString(origin.model, "unknown", 240),
+        ...(origin.mode === "organized" || origin.mode === "researched" ? { mode: origin.mode as "organized" | "researched" } : {}),
+        ...(typeof origin.sourceUrl === "string" ? { sourceUrl: importedString(origin.sourceUrl, "", 2_048) } : {}),
+        ...(typeof origin.sourceTitle === "string" ? { sourceTitle: importedString(origin.sourceTitle, "", 500) } : {}),
+        ...(typeof origin.retrievedAt === "string" ? { retrievedAt: importedString(origin.retrievedAt, "", 80) } : {}),
+        ...(origin.searchProvider === "openrouter-exa" ? { searchProvider: "openrouter-exa" as const } : {}),
       } } : {}),
     };
   });
@@ -833,6 +902,7 @@ function normalizeLlmConfig(value: unknown): LlmConfig {
 
 export default function Home() {
   const [section, setSection] = useState<Section>("overview");
+  const [theme, setTheme] = useState<Theme>("dark");
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [state, setState] = useState<AppState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
@@ -868,6 +938,8 @@ export default function Home() {
   const [quickRunMessage, setQuickRunMessage] = useState("");
   const [quickRunMode, setQuickRunMode] = useState<QuickRunMode | null>(null);
   const [quickRunOutcome, setQuickRunOutcome] = useState<QuickRunOutcomeState | null>(null);
+  const [researchRunDraft, setResearchRunDraft] = useState<ResearchRunDraftState | null>(null);
+  const [researchApproval, setResearchApproval] = useState(false);
   const [personalityAnswers, setPersonalityAnswers] = useState<Record<number, IpipNeo120Response>>({});
   const [personalityPage, setPersonalityPage] = useState(0);
   const [personalityTaking, setPersonalityTaking] = useState(false);
@@ -894,6 +966,7 @@ export default function Home() {
   const llmReady = Boolean(llmConfig.model.trim() && (!selectedLlmProvider.keyRequired || llmHasUsableApiKey));
   const quickRunBusy = quickRunPhase === "generating"
     || quickRunPhase === "calculating-preview"
+    || quickRunPhase === "researching-evidence"
     || quickRunPhase === "drafting-evaluation"
     || quickRunPhase === "refreshing-gates"
     || clearingLocalData;
@@ -902,6 +975,22 @@ export default function Home() {
     || generatingIdeas
     || aiAssistBusy !== null
     || quickRunBusy;
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    const nextTheme: Theme = savedTheme === "light" || savedTheme === "dark"
+      ? savedTheme
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    // Theme is an external browser preference restored after the server render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTheme(nextTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     const bridge = window.ideaFoundry;
@@ -1103,7 +1192,7 @@ export default function Home() {
       : "PROFILE MODE: neutral. Do not infer a founder personality or personal preferences.";
     return `You are generating falsifiable startup/protocol hypotheses for Xahau and Evernode.\n\n${profileContext}\n\nDomain boundary: ${state.project.domain || "Open"}\n\nGenerate 8 diverse candidates. For each return: title, user, buyer, triggering situation, current alternative, material consequence, why Xahau/Evernode is necessary, largest reason it may fail, critical assumption, and a 14-day experiment. Separate observed facts from hypotheses. Do not invent interviews, commitments, payments, benchmarks, or protocol facts. Do not calculate a validated score. Finish by assigning 0-100 exploration estimates for opportunity signal, protocol affordance, experimentability, and${
       state.profile.mode === "private" ? " personal fit" : " omit personal fit"
-    }. Output compact JSON suitable for manual entry into Idea Foundry.`;
+    }. Output compact JSON suitable for manual entry into SIFT.`;
   }, [state.profile, state.project.domain]);
 
   const visibleModels = useMemo(() => {
@@ -1134,6 +1223,8 @@ export default function Home() {
     setQuickRunMessage("");
     setQuickRunMode(null);
     setQuickRunOutcome(null);
+    setResearchRunDraft(null);
+    setResearchApproval(false);
     setLlmApiKey("");
     setClearLlmApiKey(false);
     setMobileMoreOpen(false);
@@ -1576,7 +1667,7 @@ export default function Home() {
     setQuickRunPhase("generating");
     setQuickRunMessage(needsGeneration
       ? "AI is creating four hypotheses, then the local profile-priority formula will select one."
-      : "Idea Foundry is selecting the strongest saved exploration match for a provisional preview.");
+      : "SIFT is selecting the strongest saved exploration match for a provisional preview.");
     setSection("quick");
 
     try {
@@ -1671,6 +1762,244 @@ export default function Home() {
     }
   }
 
+  async function startResearchRun() {
+    if (clearingLocalDataRef.current) return;
+    setQuickRunMode("research");
+    setQuickRunOutcome(null);
+    setResearchRunDraft(null);
+    setResearchApproval(false);
+    if (desktopAvailable !== true || !llmReady) {
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setLlmMessage("Connect an OpenRouter model, then return and start Research & Run.");
+      setLlmMessageTone("neutral");
+      setSection("model");
+      return;
+    }
+    if (llmConfig.provider !== "openrouter") {
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setLlmMessage("Public evidence research currently uses OpenRouter web search. Choose OpenRouter and a model, then try again.");
+      setLlmMessageTone("neutral");
+      setSection("model");
+      return;
+    }
+
+    const selectedAtStart = selectedIdea;
+    if (selectedAtStart && state.review.cutoffDate < today()) {
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setLlmMessage("The current evidence cutoff is earlier than today. Advance it before attaching newly retrieved public research.");
+      setLlmMessageTone("error");
+      setSection("review");
+      return;
+    }
+
+    const runId = ++quickRunRequestRef.current;
+    const needsGeneration = !selectedAtStart && state.ideas.length === 0;
+    setQuickRunPhase("generating");
+    setQuickRunMessage(needsGeneration
+      ? "Creating four hypotheses, then selecting the strongest exploration match."
+      : "Selecting the strongest saved exploration match for a researched preview.");
+    setSection("quick");
+
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || runId !== quickRunRequestRef.current) return;
+      if (connection.saved.provider !== "openrouter") {
+        throw new Error("Public evidence research currently requires OpenRouter.");
+      }
+      const sendsPrivateProfile = needsGeneration && state.profile.mode === "private";
+      const sendsExistingEvidence = Boolean(selectedAtStart && state.review.artifacts.some((artifact) => artifact.sourceExcerpt?.trim()));
+      const privacyDetail = [
+        sendsPrivateProfile ? "your private idea-generation profile" : "your project boundary",
+        selectedAtStart ? "the selected idea and current review context" : "generated idea hypotheses",
+        sendsExistingEvidence ? "up to 12 stored evidence excerpts for the evaluation draft" : "no stored evidence excerpts",
+      ].join(", ");
+      if (!window.confirm(
+        `Research & Run will send ${privacyDetail} to OpenRouter and the selected model provider. It will also use Exa web search, which adds OpenRouter search charges plus model tokens. The research step receives only the public idea brief—not personality scores, wallet data, or private customer identities. Continue?`,
+      )) {
+        setQuickRunPhase("idle");
+        setQuickRunMode(null);
+        setQuickRunMessage("");
+        setSection("overview");
+        return;
+      }
+
+      let candidates = [...state.ideas];
+      if (needsGeneration) {
+        const generationPrompt = prompt.replace("Generate 8 diverse candidates", "Generate 4 diverse candidates");
+        const result = await connection.bridge.llm.generateIdeas({
+          prompt: generationPrompt,
+          count: 4,
+          provider: connection.saved.provider,
+          baseUrl: connection.saved.baseUrl,
+          model: connection.saved.model,
+        });
+        if (runId !== quickRunRequestRef.current) return;
+        candidates = generatedCandidatesFromResult(result, state.profile.mode === "private");
+        if (candidates.length === 0) throw new Error("The model returned no ideas that passed the local schema.");
+        setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
+      }
+
+      const chosenIdea = selectedAtStart ?? [...candidates].sort(
+        (left, right) => calculateGenerationPriority(state.profile, right.scores)
+          - calculateGenerationPriority(state.profile, left.scores),
+      )[0];
+      if (!chosenIdea) throw new Error("Research & Run could not find an idea to evaluate.");
+      const selectedBy = selectedAtStart ? "existing-user-choice" as const : "automated-priority" as const;
+      const previewReview = selectedAtStart
+        ? state.review
+        : { ...freshQuickPreviewReview(state.review), cutoffDate: today() };
+      const projectSnapshot = { ...state.project, title: chosenIdea.title, selectedIdeaId: chosenIdea.id };
+      const snapshot = evaluationFingerprintFor(
+        chosenIdea,
+        projectSnapshot,
+        previewReview,
+        selectedAtStart ? evaluationNotes : "",
+      );
+      const claimIds = previewReview.claims.filter((claim) => claim.merit === null).map((claim) => claim.claimId);
+
+      setQuickRunPhase("calculating-preview");
+      setQuickRunMessage("Drafting missing review inputs in an isolated copy. Nothing has changed in your project.");
+      const draft = await connection.bridge.llm.draftEvaluation({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: snapshot.context,
+        claimIds: claimIds.length ? claimIds : [],
+        scope: claimIds.length ? "claims_and_gates" : "gates_only",
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      const previewWithoutResearch = buildQuickRunPreview({
+        baseReview: previewReview,
+        draft,
+        selectedIdeaId: chosenIdea.id,
+        selectedBy,
+        selectionPriority: calculateGenerationPriority(state.profile, chosenIdea.scores),
+        ideaRoute: chosenIdea.route,
+        sourceInputFingerprint: snapshot.fingerprint,
+        createdAt: new Date().toISOString(),
+      }, scoreReview);
+
+      setQuickRunPhase("researching-evidence");
+      setQuickRunMessage("Searching public sources, validating provider citations, and mapping exact excerpts to the rubric.");
+      const result = await connection.bridge.llm.researchEvidence({
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+        projectContext: publicResearchContextFor(chosenIdea, projectSnapshot),
+        claimIds: publicResearchClaimIds(previewReview),
+        maxSources: 8,
+      });
+      if (runId !== quickRunRequestRef.current) return;
+      const selectedProposalIndexes = result.evidence.map((_, index) => index);
+      const shadow = addResearchToQuickRunPreview(
+        previewWithoutResearch,
+        result,
+        selectedProposalIndexes,
+        scoreReview,
+      );
+      const live = applyResearchEvidenceBatch({
+        review: previewReview,
+        result,
+        selectedProposalIndexes,
+        expectedContextFingerprint: snapshot.fingerprint,
+        currentContextFingerprint: snapshot.fingerprint,
+      });
+      setResearchRunDraft({
+        idea: chosenIdea,
+        previewWithoutResearch,
+        previewWithResearch: shadow.preview,
+        liveReviewWithResearch: live.review,
+        liveContextFingerprint: researchLiveContextFingerprint(state.project, state.review),
+        result,
+        selectedProposalIndexes,
+        generatedCandidate: !state.ideas.some((candidate) => candidate.id === chosenIdea.id),
+      });
+      setResearchApproval(false);
+      setQuickRunPhase("approve-research");
+      setQuickRunMessage(`${result.evidence.length} cited public finding${result.evidence.length === 1 ? " is" : "s are"} ready for one review.`);
+      setSection("quick");
+    } catch (error) {
+      if (runId !== quickRunRequestRef.current) return;
+      setQuickRunPhase("idle");
+      setQuickRunMode(null);
+      setResearchRunDraft(null);
+      setResearchApproval(false);
+      setLlmMessage(error instanceof Error ? error.message : "Research & Run could not produce a cited preview.");
+      setLlmMessageTone("error");
+      setSection("model");
+    }
+  }
+
+  function approveResearchRun() {
+    if (!researchRunDraft || !researchApproval) {
+      setToast("Confirm the cited public-source packet before attaching it");
+      return;
+    }
+    if (researchRunDraft.liveContextFingerprint !== researchLiveContextFingerprint(state.project, state.review)) {
+      setToast("The project changed during research. Run Research & Run again.");
+      return;
+    }
+    const previousReview = state.review;
+    const nextIdea = researchRunDraft.idea;
+    setState((current) => ({
+      ...current,
+      ideas: current.ideas.some((candidate) => candidate.id === nextIdea.id)
+        ? current.ideas
+        : [...current.ideas, nextIdea],
+      project: {
+        ...current.project,
+        title: current.project.title === "Untitled idea review" || !current.project.title.trim()
+          ? nextIdea.title
+          : current.project.title,
+        selectedIdeaId: nextIdea.id,
+      },
+      review: researchRunDraft.liveReviewWithResearch,
+    }));
+    setAiUndo({
+      label: `${researchRunDraft.result.evidence.length} AI-researched public record${researchRunDraft.result.evidence.length === 1 ? "" : "s"}`,
+      review: previousReview,
+      appliedInputFingerprint: scoreReview(researchRunDraft.liveReviewWithResearch).inputFingerprint,
+    });
+    setQuickRunOutcome({
+      preview: researchRunDraft.previewWithResearch,
+      idea: nextIdea,
+      research: {
+        result: researchRunDraft.result,
+        appliedCount: researchRunDraft.result.evidence.length,
+        committed: true,
+      },
+    });
+    setResearchRunDraft(null);
+    setResearchApproval(false);
+    setQuickRunPhase("idle");
+    setQuickRunMode(null);
+    setQuickRunMessage("");
+    setSection("results");
+    setToast("Cited public evidence added at E1; the deterministic outcome was recalculated locally");
+  }
+
+  function finishResearchRunWithoutEvidence() {
+    if (!researchRunDraft) return;
+    setQuickRunOutcome({
+      preview: researchRunDraft.previewWithoutResearch,
+      idea: researchRunDraft.idea,
+      research: {
+        result: researchRunDraft.result,
+        appliedCount: 0,
+        committed: false,
+      },
+    });
+    setResearchRunDraft(null);
+    setResearchApproval(false);
+    setQuickRunPhase("idle");
+    setQuickRunMode(null);
+    setQuickRunMessage("");
+    setSection("results");
+  }
+
   async function startGuidedQuickRun() {
     if (clearingLocalDataRef.current) return;
     setQuickRunMode("guided");
@@ -1735,7 +2064,7 @@ export default function Home() {
       setState((current) => ({ ...current, ideas: [...current.ideas, ...candidates] }));
       setLastGeneration({ provider: result.provider, model: result.model, count: candidates.length });
       setQuickRunPhase("choose-idea");
-      setQuickRunMessage("Choose one hypothesis to continue. Idea Foundry will not choose a business direction for you.");
+      setQuickRunMessage("Choose one hypothesis to continue. SIFT will not choose a business direction for you.");
       setSection("ideas");
     } catch (error) {
       if (runId !== quickRunRequestRef.current) return;
@@ -1889,11 +2218,18 @@ export default function Home() {
     setQuickRunPhase("idle");
     setQuickRunMessage("");
     setQuickRunMode(null);
+    setResearchRunDraft(null);
+    setResearchApproval(false);
     if (section === "quick") setSection("overview");
   }
 
   function inspectQuickRunOutcome() {
     if (!quickRunOutcome) return;
+    if (quickRunOutcome.research?.committed) {
+      setSection("evidence");
+      setToast("Opened the live evidence ledger; researched records remain capped at E1");
+      return;
+    }
     if (quickRunOutcome.preview.selectedBy === "existing-user-choice") {
       setSection("review");
       setToast("Opened the live review; the AI preview remains separate");
@@ -2254,7 +2590,7 @@ export default function Home() {
   function exportPacket() {
     const packet = {
       manifest: {
-        product: "Idea Foundry — Xahau + Evernode",
+        product: "SIFT — Xahau + Evernode",
         frameworkVersion: FRAMEWORK_VERSION,
         engineVersion: ENGINE_VERSION,
         rubricManifestSha256: score.rubricManifestSha256,
@@ -2267,7 +2603,7 @@ export default function Home() {
       computed: score,
       ...(includeProfile ? { profile: state.profile } : {}),
     };
-    downloadFile("idea-foundry-review.json", JSON.stringify(packet, null, 2), "application/json");
+    downloadFile("sift-review.json", JSON.stringify(packet, null, 2), "application/json");
   }
 
   function exportScorecard() {
@@ -2277,7 +2613,7 @@ export default function Home() {
         .map(csvCell)
         .join(","),
     );
-    downloadFile("idea-foundry-scorecard.csv", [header.join(","), ...rows].join("\n"), "text/csv");
+    downloadFile("sift-scorecard.csv", [header.join(","), ...rows].join("\n"), "text/csv");
   }
 
   function importPacket() {
@@ -2299,7 +2635,7 @@ export default function Home() {
       setImportText("");
       setToast("Review imported and recalculated locally");
     } catch {
-      setToast("That is not a valid Idea Foundry review packet");
+      setToast("That is not a valid SIFT review packet");
     }
   }
 
@@ -2312,72 +2648,61 @@ export default function Home() {
     return (
       <main className="start-page">
         <header className="start-header">
-          <Brand />
-          <span className="privacy-pill"><span aria-hidden="true">●</span> Local-only</span>
+          <Brand theme={theme} />
+          <div className="start-header-actions"><span className="privacy-pill"><span aria-hidden="true">●</span> Local by default</span><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} /></div>
         </header>
         <section className="hero">
           <div className="hero-copy">
-            <p className="eyebrow">Xahau + Evernode idea validation</p>
-            <h1>Find the idea worth disproving.</h1>
-            <p className="hero-lede">Turn a blank page into useful ideas, choose one, and see what real evidence actually supports.</p>
+            <h1>Find what holds.</h1>
+            <p className="hero-lede">Generate ideas, challenge assumptions, and let evidence decide what survives.</p>
             <div className="hero-actions">
-              <button className="button primary" onClick={() => start("neutral")}>Start a project <span aria-hidden="true">→</span></button>
-              <button className="button secondary" onClick={startQuickFromWelcome}>AI Quick Run</button>
-              <button className="button secondary" onClick={() => start("private")}>Personalize my ideas</button>
-              <button className="button ghost" onClick={startWithIdea}>I already have an idea</button>
+              <button className="button primary" onClick={startQuickFromWelcome}>Start with AI <span aria-hidden="true">→</span></button>
+              <button className="button secondary" onClick={() => start("neutral")}>Start manually</button>
             </div>
-            <p className="trust-line">No account · Saved on this device · Nothing is shared automatically</p>
-            <div className="method-strip" aria-label="Method">
-              {[["01", "Generate candidates"], ["02", "Challenge assumptions"], ["03", "Attach evidence"], ["04", "Calculate readiness"]].map(([number, label]) => (
-                <div key={number}><span>{number}</span><strong>{label}</strong></div>
-              ))}
+            <div className="hero-secondary-actions">
+              <button className="text-button" onClick={() => start("private")}>Personalize ideas</button>
+              <span aria-hidden="true">·</span>
+              <button className="text-button" onClick={startWithIdea}>I already have an idea</button>
             </div>
+            <p className="trust-line">No account · Deterministic scoring · Nothing shared automatically</p>
           </div>
-          <aside className="specimen" aria-label="Illustrative result specimen">
-            <img className="specimen-mark" src={BRAND_MARK_URL} alt="" aria-hidden="true" />
-            <div className="specimen-head"><span>Review specimen</span><span className="provisional-dot">Illustrative</span></div>
-            <div className="specimen-score"><span>Evidence-adjusted</span><strong>64.5</strong><small>/ 100</small></div>
-            <div className="paired-bar"><i style={{ width: "82%" }} /><b style={{ width: "64.5%" }} /></div>
-            <div className="specimen-grid">
-              <div><strong>51</strong><span>atomic claims</span></div>
-              <div><strong>8</strong><span>non-compensable gates</span></div>
-              <div><strong>4</strong><span>separate metrics</span></div>
-              <div><strong>12</strong><span>review categories</span></div>
-            </div>
-            <div className="instrument-note"><span>Rules engine</span><code>{ENGINE_VERSION}</code></div>
+          <aside className="hero-art" aria-label="SIFT tornado artwork">
+            <img className="hero-mark" src={SIFT_HERO_URL} alt="" aria-hidden="true" />
           </aside>
         </section>
-        <footer className="start-footer"><span>Open-source methodology</span><span>Deterministic calculation</span><span>Profile-separated scoring</span></footer>
       </main>
     );
   }
 
   const primaryNavigation: Array<{ id: Section; label: string; meta?: string }> = [
     { id: "overview", label: "Home" },
-    { id: "ideas", label: "Ideas", meta: String(state.ideas.length) },
-    { id: "review", label: "Evaluate", meta: `${score.assessedClaims}/${score.totalClaims}` },
-    { id: "evidence", label: "Evidence", meta: String(state.review.artifacts.length) },
-    { id: "results", label: "Decision", meta: score.numericEligible && score.gateEligible ? "✓" : "!" },
+    { id: "ideas", label: "Ideas" },
+    { id: "review", label: "Evaluate" },
+    { id: "evidence", label: "Evidence" },
+    { id: "results", label: "Decision" },
+    { id: "build", label: "Build" },
   ];
   const utilityNavigation: Array<{ id: Section; label: string; meta?: string }> = [
-    { id: "profile", label: "Personalize ideas", meta: state.profile.mode === "private" ? (profileErrors.length ? "!" : "P") : "N" },
-    { id: "model", label: "AI model", meta: desktopAvailable && llmReady ? "✓" : "—" },
+    { id: "profile", label: "Personalize ideas" },
+    { id: "model", label: "AI model" },
     { id: "export", label: "Import & export" },
   ];
+  const mobilePrimaryNavigation = primaryNavigation.filter((item) => item.id !== "build");
+  const mobileUtilityNavigation = [primaryNavigation.find((item) => item.id === "build")!, ...utilityNavigation];
 
   return (
     <main className="app-shell">
       <header className="app-header">
-        <Brand compact />
+        <Brand compact theme={theme} />
         <div className="project-heading">
-          <span>Current review</span>
           <input
             aria-label="Project title"
+            placeholder="Untitled project"
             value={state.project.title}
             onChange={(event) => setState((current) => ({ ...current, project: { ...current.project, title: event.target.value } }))}
           />
         </div>
-        <div className="header-status"><span className="saved-dot" /> Saved locally</div>
+        <div className="header-actions"><div className="header-status"><span className="saved-dot" /> Saved</div><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} /></div>
       </header>
 
       <aside className="side-rail">
@@ -2403,14 +2728,16 @@ export default function Home() {
           </nav>
         </details>
         <div className="rail-footer">
-          <div><span>Privacy</span><strong>{state.profile.mode === "private" ? "Private profile" : "Profile-neutral"}</strong></div>
-          <div><span>Rubric</span><strong>v3 · 51 claims</strong></div>
-          <div className="rail-clear-actions">
+          <span className="rail-local-status"><i aria-hidden="true" /> Local workspace</span>
+          <details className="rail-data-controls">
+            <summary>Data controls</summary>
+            <div className="rail-clear-actions">
             <button className="text-button danger" disabled={clearingLocalData} onClick={() => {
               if (window.confirm("Clear this project? Your saved AI connection will be kept.")) clearProjectData();
             }}>Clear project</button>
             <button className="text-button danger" disabled={clearingLocalData} onClick={() => void clearAllLocalData()}>{clearingLocalData ? "Clearing…" : "Clear everything"}</button>
-          </div>
+            </div>
+          </details>
         </div>
       </aside>
 
@@ -2433,6 +2760,7 @@ export default function Home() {
             desktopAvailable={desktopAvailable === true}
             llmReady={llmReady}
             quickRunBusy={quickRunBusy}
+            onResearchRun={() => void startResearchRun()}
             onQuickRun={() => void startQuickRun()}
             onGuidedQuickRun={() => void startGuidedQuickRun()}
             onNavigate={setSection}
@@ -2440,28 +2768,39 @@ export default function Home() {
           />
         )}
 
-        {section === "quick" && (
+        {section === "quick" && quickRunMode === "research" && quickRunPhase === "approve-research" && researchRunDraft ? (
+          <ResearchRunWorkspace
+            draft={researchRunDraft}
+            approved={researchApproval}
+            onApprovalChange={setResearchApproval}
+            onApprove={approveResearchRun}
+            onPreviewOnly={finishResearchRunWithoutEvidence}
+            onDiscard={exitQuickRun}
+          />
+        ) : section === "quick" && (
           <div className="page-section narrow quick-run-page">
             <PageHeading
-              eyebrow={quickRunMode === "auto-preview" ? "AI one-click preview" : "Guided Quick Run"}
-              title={quickRunMode === "auto-preview" ? "One click selects. AI proposes. The formula calculates." : "AI drafts the work. You approve what counts."}
-              description={quickRunMode === "auto-preview"
+              eyebrow={quickRunMode === "research" ? "Research & Run" : quickRunMode === "auto-preview" ? "AI one-click preview" : "Guided Quick Run"}
+              title={quickRunMode === "research" ? "One start. One source review. One provisional outcome." : quickRunMode === "auto-preview" ? "One click selects. AI proposes. The formula calculates." : "AI drafts the work. You approve what counts."}
+              description={quickRunMode === "research"
+                ? "SIFT is building an isolated review, searching attributable public sources, and validating exact citation excerpts before anything can enter your evidence ledger."
+                : quickRunMode === "auto-preview"
                 ? "AI selects an exploration match and proposes missing ratings in an isolated copy. Your live review and evidence never change."
                 : "Guided Quick Run automates safe setup and pauses for idea choice, merit approval, real evidence, and every gate decision."}
             />
             <section className="quick-run-working" aria-live="polite">
-              <img src={BRAND_ICON_URL} alt="" aria-hidden="true" />
-              <div><span>{quickRunBusy ? "Working" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next checkpoint."}</h2><p>Idea → Evaluation → Evidence → Gates → Decision</p></div>
+              <img src={SIFT_MARK_URL} alt="" aria-hidden="true" />
+              <div><span>{quickRunBusy ? "Working" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next checkpoint."}</h2><p>{quickRunMode === "research" ? "Idea → Evaluation → Public research → Cited preview" : "Idea → Evaluation → Evidence → Gates → Decision"}</p></div>
               {quickRunBusy && <i aria-hidden="true" />}
             </section>
-            <div className="quick-run-boundary"><strong>{quickRunMode === "auto-preview" ? "A preview is not an official review." : "Quick does not mean automatic approval."}</strong><span>{quickRunMode === "auto-preview" ? "AI inputs exist only in a shadow copy. No evidence is created or verified, and the live deterministic record is untouched." : "No idea, merit rating, evidence record, gate, or final decision is accepted without your action."}</span></div>
+            <div className="quick-run-boundary"><strong>{quickRunMode === "research" ? "Public research is not customer validation." : quickRunMode === "auto-preview" ? "A preview is not an official review." : "Quick does not mean automatic approval."}</strong><span>{quickRunMode === "research" ? "Only provider-cited exact excerpts can proceed, every record stays DeskResearch/E1, and one consolidated approval is required before your project changes." : quickRunMode === "auto-preview" ? "AI inputs exist only in a shadow copy. No evidence is created or verified, and the live deterministic record is untouched." : "No idea, merit rating, evidence record, gate, or final decision is accepted without your action."}</span></div>
             <button className="button secondary" onClick={exitQuickRun}>Exit Quick Run</button>
           </div>
         )}
 
         {section === "ideas" && (
           <div className="page-section">
-            <PageHeading eyebrow="Ideas" title="Find a useful idea to test." description="Generate a slate, try examples, or add your own. You can edit everything before choosing one to evaluate." />
+            <PageHeading eyebrow="Ideas" title="Choose a direction." description="Generate, edit, or add your own." />
             {quickRunPhase === "choose-idea" && <div className="quick-run-checkpoint"><strong>Quick Run checkpoint · Choose the direction</strong><span>{quickRunMessage}</span><button className="text-button" onClick={exitQuickRun}>Use manual flow</button></div>}
             <div className="idea-start-card">
               <div>
@@ -2489,7 +2828,7 @@ export default function Home() {
             </div>
             <details className="prompt-panel">
               <summary>Use the prompt with any LLM</summary>
-              <p>Copy this if you prefer another AI tool. The model only proposes editable ideas; Idea Foundry remains the calculator.</p>
+              <p>Copy this if you prefer another AI tool. The model proposes editable ideas; SIFT remains the calculator.</p>
               <textarea readOnly value={prompt} rows={9} aria-label="Idea generation prompt" />
               <button className="button small secondary" onClick={() => copyText(prompt, "LLM prompt copied")}>Copy prompt</button>
             </details>
@@ -2545,7 +2884,7 @@ export default function Home() {
 
         {section === "model" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="AI model" title="Connect the model you want to use." description="OpenRouter is the quickest cloud option. Ollama and LM Studio keep prompts on your computer. No ChatGPT sign-in is required." />
+            <PageHeading eyebrow="AI model" title="Connect a model." description="Use OpenRouter, Ollama, or LM Studio. No ChatGPT sign-in." />
             {desktopAvailable === false ? (
               <section className="desktop-required-card">
                 <span className="desktop-required-mark">DESKTOP</span>
@@ -2557,7 +2896,7 @@ export default function Home() {
             ) : (
               <>
                 <div className="model-safety-strip">
-                  <img src={BRAND_ICON_URL} alt="" aria-hidden="true" />
+                  <img src={SIFT_MARK_URL} alt="" aria-hidden="true" />
                   <div><strong>Your model suggests. You decide.</strong><span>AI output stays editable and never becomes evidence or a score automatically.</span></div>
                 </div>
 
@@ -2732,7 +3071,7 @@ export default function Home() {
 
         {section === "profile" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="Personalize ideas" title="Make generated ideas feel more like you." description="Choose the themes and working style you care about. This changes idea generation and ranking only—never evidence or the final decision score." />
+            <PageHeading eyebrow="Profile" title="Personalize ideas." description="This changes idea generation and ranking only—never evidence or the final decision score." />
             <div className="mode-switch" role="group" aria-label="Profile mode">
               <button className={state.profile.mode === "neutral" ? "active" : ""} onClick={() => chooseProfileMode("neutral")}><strong>Keep it neutral</strong><span>Rank ideas without personal preferences</span></button>
               <button className={state.profile.mode === "private" ? "active" : ""} onClick={() => chooseProfileMode("private")}><strong>Personalize my ideas</strong><span>Use my interests and working style</span></button>
@@ -2788,7 +3127,7 @@ export default function Home() {
 
         {section === "review" && (
           <div className="page-section">
-            <PageHeading eyebrow="Evaluate" title="Answer what must be true." description="Work through the claims one category at a time. Unanswered items stay unassessed, and the calculator never fills gaps optimistically." />
+            <PageHeading eyebrow="Evaluate" title="Test what must be true." description="Unanswered claims stay unassessed." />
             <section className="ai-assist-card" aria-labelledby="evaluation-ai-title">
               <div className="ai-assist-head">
                 <div className="ai-assist-symbol" aria-hidden="true">AI</div>
@@ -2866,12 +3205,13 @@ export default function Home() {
                 </div>
               )}
             </section>
-            <div className="review-config">
+            <fieldset className="review-config">
+              <legend className="sr-only">Review configuration</legend>
               <label><span>Dominant archetype</span><select value={state.review.archetype} onChange={(event) => updateReview({ archetype: event.target.value as Archetype })}>{ARCHETYPES.map((item) => <option key={item} value={item}>{archetypeLabels[item]}</option>)}</select></label>
               <label><span>Target stage</span><select value={state.review.stage} onChange={(event) => updateReview({ stage: event.target.value as Stage })}>{STAGES.map((item) => <option key={item} value={item}>{stageLabels[item]}</option>)}</select></label>
               <label><span>Protocol route</span><select value={state.review.protocolRoute} onChange={(event) => updateReview({ protocolRoute: event.target.value as ProtocolRoute })}>{Object.entries(routeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label><span>Evidence cutoff</span><input type="date" value={state.review.cutoffDate} onChange={(event) => updateReview({ cutoffDate: event.target.value })} /></label>
-            </div>
+            </fieldset>
             <div className="progress-line"><div><span style={{ width: `${(score.assessedClaims / score.totalClaims) * 100}%` }} /></div><strong>{score.assessedClaims} of {score.totalClaims} assessed</strong><button className="text-button" onClick={() => setSection("evidence")}>Attach evidence →</button></div>
 
             <section className="gate-section">
@@ -2926,7 +3266,11 @@ export default function Home() {
 
         {section === "evidence" && (
           <div className="page-section">
-            <PageHeading eyebrow="Evidence" title="Add proof for your answers." description="Link each piece of evidence to a claim. Idea Foundry checks quality limits, dates, verification, duplicates, and counterevidence." />
+            <PageHeading eyebrow="Evidence" title="Add evidence." description="Every record stays linked, dated, and reviewable." />
+            <section className="evidence-research-launch">
+              <div><p className="eyebrow">Public research</p><h2>Let AI find cited evidence</h2><p>Research & Run searches public sources through OpenRouter, accepts only provider-returned exact excerpts, caps every finding at DeskResearch/E1, and presents one consolidated approval.</p></div>
+              <div><button className="button primary" disabled={quickRunBusy} onClick={() => void startResearchRun()}>{quickRunBusy ? "Researching…" : "Find public evidence"}</button><small>Requires OpenRouter · model and web-search charges apply</small></div>
+            </section>
             <section className="ai-assist-card evidence-ai-card" aria-labelledby="evidence-ai-title">
               <div className="ai-assist-head">
                 <div className="ai-assist-symbol" aria-hidden="true">AI</div>
@@ -3002,7 +3346,7 @@ export default function Home() {
                   <label><span>Rubric claim</span><select value={evidenceDraft.claimId} onChange={(event) => setEvidenceDraft((current) => ({ ...current, claimId: event.target.value }))}>{RUBRIC.map((row) => <option value={row.claimId} key={row.claimId}>{row.claimId} · {row.atomicClaim}</option>)}</select></label>
                   <label><span>Direction</span><select value={evidenceDraft.direction} onChange={(event) => setEvidenceDraft((current) => ({ ...current, direction: event.target.value as "supports" | "contradicts" }))}><option value="supports">Supports</option><option value="contradicts">Contradicts</option></select></label>
                   <label><span>Evidence type</span><select value={evidenceDraft.evidenceType} onChange={(event) => setEvidenceDraft((current) => ({ ...current, evidenceType: event.target.value as EvidenceType }))}>{EVIDENCE_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label>
-                  <label><span>Claim grade</span><select value={evidenceDraft.grade} onChange={(event) => setEvidenceDraft((current) => ({ ...current, grade: event.target.value as EvidenceGrade }))}>{EVIDENCE_GRADES.map((grade) => <option key={grade}>{grade}</option>)}</select><small>Max for {evidenceDraft.evidenceType}: E{EVIDENCE_TYPE_MAX_RANK[evidenceDraft.evidenceType]}</small></label>
+                  <label><span>Claim grade</span><select aria-describedby="evidence-grade-help" value={evidenceDraft.grade} onChange={(event) => setEvidenceDraft((current) => ({ ...current, grade: event.target.value as EvidenceGrade }))}>{EVIDENCE_GRADES.map((grade) => <option key={grade} value={grade}>{grade} — {EVIDENCE_GRADE_LABELS[grade]}</option>)}</select><small>Max for {evidenceDraft.evidenceType}: E{EVIDENCE_TYPE_MAX_RANK[evidenceDraft.evidenceType]}</small></label>
                   <label><span>Observed</span><input type="date" value={evidenceDraft.evidenceDate} onChange={(event) => setEvidenceDraft((current) => ({ ...current, evidenceDate: event.target.value }))} /></label>
                   <label><span>Expires</span><input type="date" value={evidenceDraft.expiryDate} onChange={(event) => setEvidenceDraft((current) => ({ ...current, expiryDate: event.target.value }))} /></label>
                   <label><span>Reviewer</span><input value={evidenceDraft.reviewer} placeholder="Required for E2+" onChange={(event) => setEvidenceDraft((current) => ({ ...current, reviewer: event.target.value }))} /></label>
@@ -3011,9 +3355,9 @@ export default function Home() {
                 <label className="check-field"><input type="checkbox" checked={evidenceDraft.reviewerVerified} onChange={(event) => setEvidenceDraft((current) => ({ ...current, reviewerVerified: event.target.checked }))} /><span>Reviewer verified this evidence</span></label>
                 <button className="button primary" onClick={addEvidence}>Add & recalculate</button>
               </section>
-              <aside className="evidence-rules">
+              <aside className="evidence-rules" id="evidence-grade-help">
                 <p className="eyebrow">Grade anchors</p>
-                {["E0 · Assertion or unknown", "E1 · Secondary research or expert opinion", "E2 · Verified primary observation or direct test", "E3 · Behavior, commitment, telemetry, or adversarial test", "E4 · Repeated paid/production behavior or independent audit"].map((text) => <div key={text}><strong>{text.slice(0, 2)}</strong><span>{text.slice(5)}</span></div>)}
+                {EVIDENCE_GRADES.map((grade) => <div key={grade}><strong>{grade}</strong><span>{EVIDENCE_GRADE_LABELS[grade]}</span></div>)}
               </aside>
             </div>
             <section className="ledger-section">
@@ -3022,7 +3366,7 @@ export default function Home() {
                 <div className="ledger-table">
                   {state.review.artifacts.map((artifact) => (
                     <article key={artifact.artifactId} className={`ledger-row direction-${artifact.direction}`}>
-                      <div><code>{artifact.artifactId}</code><strong>{artifact.title}</strong><span title={artifact.sourceExcerpt}>{artifact.evidenceType} · {artifact.evidenceClaimId}{artifact.ingestionOrigin ? " · AI-organized, human-approved" : ""}</span></div>
+                      <div><code>{artifact.artifactId}</code><strong>{artifact.title}</strong><span title={artifact.sourceExcerpt}>{artifact.evidenceType} · {artifact.evidenceClaimId}{artifact.ingestionOrigin?.mode === "researched" ? " · AI-researched public source" : artifact.ingestionOrigin ? " · AI-organized, human-approved" : ""}</span></div>
                       <div><span>Claim</span><strong>{artifact.rubricClaimIds.join(", ")}</strong></div>
                       <div><span>Grade</span><strong>{artifact.grade}</strong></div>
                       <div><span>Direction</span><strong>{artifact.direction}</strong></div>
@@ -3051,6 +3395,7 @@ export default function Home() {
               <Metric label="Verified Coverage" value={score.verifiedEvidenceCoverage} note="Rubric weight at E2 or higher" suffix="%" />
             </div>
             <div className="integrity-strip"><span>Policy-adjusted score <strong>{score.policyAdjustedValidatedScore}</strong></span><span>Active cap <strong>{score.policyCap}</strong></span><span>Assessed <strong>{score.assessedClaims}/{score.totalClaims}</strong></span><span>Input fingerprint <code>{score.inputFingerprint}</code></span></div>
+            <section className="build-handoff-strip"><div><p className="eyebrow">Next workspace</p><strong>Carry this decision into a guarded Xahau / Evernode build flow.</strong><span>Your score, evidence state, selected route, and critical assumption become the build brief.</span></div><button className="button primary" disabled={!selectedIdea} onClick={() => setSection("build")}>{selectedIdea ? "Open Build" : "Choose an idea first"}</button></section>
             {(score.validationErrors.length > 0 || score.numericBlockers.length > 0 || score.gateBlockers.length > 0) && (
               <div className="issue-columns">
                 {score.validationErrors.length > 0 && <IssueList title="Validation errors" items={score.validationErrors} tone="error" />}
@@ -3076,9 +3421,20 @@ export default function Home() {
           </div>
         )}
 
+        {section === "build" && (
+          <BuildWorkspace
+            state={state}
+            score={score}
+            selectedIdea={selectedIdea}
+            desktopAvailable={desktopAvailable === true}
+            onNavigate={setSection}
+            onToast={setToast}
+          />
+        )}
+
         {section === "export" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="Import & export" title="Take your work with you." description="Download the complete reasoning or bring an existing review back in. Nothing is published or uploaded by Idea Foundry." />
+            <PageHeading eyebrow="Import & export" title="Move your work." description="Download or restore a review. Nothing is uploaded by SIFT." />
             <section className="export-card">
               <div className="export-icon">JSON</div><div><h3>Full review packet</h3><p>Project, candidates, 51 claims, evidence ledger, gates, deterministic output, versions, and hashes.</p></div><button className="button primary" onClick={exportPacket}>Download JSON</button>
             </section>
@@ -3086,24 +3442,28 @@ export default function Home() {
               <div className="export-icon">CSV</div><div><h3>Claim scorecard</h3><p>One auditable row per canonical claim with locked weights and calculated contributions.</p></div><button className="button secondary" onClick={exportScorecard}>Download CSV</button>
             </section>
             <label className="profile-export"><input type="checkbox" checked={includeProfile} onChange={(event) => setIncludeProfile(event.target.checked)} /><span><strong>Include private profile in JSON</strong><small>Off by default. An applied personality result is included with the profile, but raw questionnaire answers never are. Profile data is not required to reproduce objective scores.</small></span></label>
-            <section className="import-card"><div><p className="eyebrow">Import</p><h2>Recalculate an existing packet</h2><p>Client-supplied computed fields are ignored. The current engine recalculates from review inputs.</p></div><textarea rows={8} value={importText} placeholder="Paste Idea Foundry JSON here" onChange={(event) => setImportText(event.target.value)} /><button className="button secondary" disabled={!importText.trim()} onClick={importPacket}>Validate & import</button></section>
+            <section className="import-card"><div><p className="eyebrow">Import</p><h2>Recalculate an existing packet</h2><p>Client-supplied computed fields are ignored. The current engine recalculates from review inputs.</p></div><textarea rows={8} value={importText} placeholder="Paste SIFT JSON here" onChange={(event) => setImportText(event.target.value)} /><button className="button secondary" disabled={!importText.trim()} onClick={importPacket}>Validate & import</button></section>
           </div>
         )}
       </section>
 
       <nav className="mobile-nav" aria-label="Mobile workspace">
-        {primaryNavigation.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}
-        <button className={utilityNavigation.some((item) => item.id === section) ? "active" : ""} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((current) => !current)}>More</button>
-        {mobileMoreOpen && <div className="mobile-more-menu" role="menu" aria-label="More workspace tools">{utilityNavigation.map((item) => <button role="menuitem" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}</div>}
+        {mobilePrimaryNavigation.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}
+        <button className={mobileUtilityNavigation.some((item) => item.id === section) ? "active" : ""} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((current) => !current)}>More</button>
+        {mobileMoreOpen && <div className="mobile-more-menu" role="menu" aria-label="More workspace tools">{mobileUtilityNavigation.map((item) => <button role="menuitem" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileMoreOpen(false); }}>{item.label}</button>)}</div>}
       </nav>
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
   );
 }
 
-function Brand({ compact = false }: { compact?: boolean }) {
-  if (!compact) return <div className="brand brand-wide"><img src={BRAND_LOGO_URL} alt="Idea Foundry — Xahau + Evernode" /></div>;
-  return <div className="brand compact"><img src={BRAND_ICON_URL} alt="" aria-hidden="true" /><span><strong>Idea Foundry</strong><small>Xahau + Evernode</small></span></div>;
+function Brand({ compact = false, theme }: { compact?: boolean; theme: Theme }) {
+  return <div className={`brand ${compact ? "compact" : "brand-wide"}`}><img className="brand-tornado" src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" /><img className="brand-wordmark" src={theme === "dark" ? SIFT_WORDMARK_LIGHT_URL : SIFT_WORDMARK_DARK_URL} alt="SIFT" /></div>;
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const next = theme === "dark" ? "light" : "dark";
+  return <button className="theme-toggle" type="button" onClick={onToggle} aria-label={`Use ${next} mode`} title={`Use ${next} mode`}><span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span><b>{next}</b></button>;
 }
 
 function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
@@ -3235,7 +3595,7 @@ function PersonalityAssessmentCard({
               ))}
             </div>
             <div className="personality-work-styles">
-              <h4>How Idea Foundry will use this</h4>
+              <h4>How SIFT will use this</h4>
               <p>These neutral work-style signals help the AI vary founder-fit hypotheses. They never change deterministic review scores or count as market evidence.</p>
               <div>{displayedResult.workStyleFit.map((dimension) => <span key={dimension.id}><small>{dimension.label}</small><strong>{dimension.orientation}</strong></span>)}</div>
             </div>
@@ -3260,7 +3620,7 @@ function PersonalityAssessmentCard({
         ) : (
           <div className="personality-intro">
             <div className="personality-intro-grid">
-              <div><p className="eyebrow">Why this instrument</p><h3>A real Big Five profile you can use locally</h3><p>Idea Foundry uses Johnson’s public-domain <strong>IPIP-NEO-120</strong>: a peer-reviewed 120-item measure of the five broad domains and 30 facets. The commercial NEO-PI-3 is not embedded because its items and scoring are proprietary.</p></div>
+              <div><p className="eyebrow">Why this instrument</p><h3>A real Big Five profile you can use locally</h3><p>SIFT uses Johnson’s public-domain <strong>IPIP-NEO-120</strong>: a peer-reviewed 120-item measure of the five broad domains and 30 facets. The commercial NEO-PI-3 is not embedded because its items and scoring are proprietary.</p></div>
               <div><span><strong>120</strong>statements</span><span><strong>5 + 30</strong>domains and facets</span><span><strong>15–20</strong>minutes</span></div>
             </div>
             <ul>
@@ -3302,6 +3662,64 @@ function IssueList({ title, items, tone }: { title: string; items: string[]; ton
   return <section className={`issue-list ${tone}`}><div><span aria-hidden="true">{tone === "error" ? "×" : tone === "warning" ? "!" : "i"}</span><h3>{title}</h3><small>{items.length}</small></div><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></section>;
 }
 
+function citationDomain(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return "public source";
+  }
+}
+
+function ResearchRunWorkspace({ draft, approved, onApprovalChange, onApprove, onPreviewOnly, onDiscard }: {
+  draft: ResearchRunDraftState;
+  approved: boolean;
+  onApprovalChange: (approved: boolean) => void;
+  onApprove: () => void;
+  onPreviewOnly: () => void;
+  onDiscard: () => void;
+}) {
+  const supportCount = draft.result.evidence.filter((proposal) => proposal.direction === "supports").length;
+  const contradictionCount = draft.result.evidence.length - supportCount;
+  const usedSourceIds = new Set(draft.result.evidence.map((proposal) => proposal.sourceId));
+  const unusedCitations = draft.result.citations.filter((citation) => !usedSourceIds.has(citation.sourceId));
+  return (
+    <div className="page-section narrow research-review-page">
+      <PageHeading eyebrow="Research & Run" title="One review before SIFT changes your project." description="Every proposed record below is tied to an exact excerpt returned in an OpenRouter web-search citation." />
+      <section className="research-summary" aria-label="Research summary">
+        <div><span>Chosen idea</span><strong>{draft.idea.title}</strong><small>{draft.generatedCandidate ? "Generated and selected by local profile priority" : "Already in this workspace"}</small></div>
+        <div><span>Grounded findings</span><strong>{draft.result.evidence.length}</strong><small>{draft.result.citations.length} cited sources</small></div>
+        <div><span>Direction</span><strong>{supportCount} support · {contradictionCount} contradict</strong><small>Contradictions are never auto-acknowledged</small></div>
+        <div><span>Evidence ceiling</span><strong>DeskResearch · E1</strong><small>Never customer validation</small></div>
+      </section>
+      <div className="research-integrity-note"><strong>The outcome is already calculated in a shadow copy.</strong><span>Approving this packet selects the idea when needed, attaches all {draft.result.evidence.length} cited public records, links supporting records to their claims, and recalculates locally. AI merit and gate suggestions remain provisional.</span></div>
+      <section className="research-packet" aria-labelledby="research-packet-title">
+        <div className="research-packet-head"><div><p className="eyebrow">Cited packet</p><h2 id="research-packet-title">Public findings ready to attach</h2></div><span>{draft.result.webSearchRequests} web search request{draft.result.webSearchRequests === 1 ? "" : "s"}</span></div>
+        <div className="research-source-list">
+          {draft.result.evidence.map((proposal, index) => {
+            const row = RUBRIC.find((item) => item.claimId === proposal.claimIds[0]);
+            return (
+              <article className={`research-source direction-${proposal.direction}`} key={`${proposal.sourceId}-${index}`}>
+                <div className="research-source-top"><span>{proposal.direction === "supports" ? "Supports" : "Contradicts"}</span><code>{proposal.claimIds.join(", ")}</code><strong>{row?.atomicClaim ?? "Canonical claim"}</strong><b>E1</b></div>
+                <h3>{proposal.title}</h3>
+                <blockquote>{proposal.sourceExcerpt}</blockquote>
+                <div className="research-source-meta"><span>{proposal.sourceTitle}</span><strong>{citationDomain(proposal.sourceUrl)}</strong><code>{proposal.sourceUrl}</code></div>
+                <p>{proposal.reasoning}</p>
+                {proposal.uncertainty && <small>Limit: {proposal.uncertainty}</small>}
+              </article>
+            );
+          })}
+        </div>
+        {unusedCitations.length > 0 && <details className="research-unused"><summary>{unusedCitations.length} cited source{unusedCitations.length === 1 ? "" : "s"} not mapped to a rubric claim</summary><ul>{unusedCitations.map((citation) => <li key={citation.sourceId}><strong>{citation.title}</strong><span>{citationDomain(citation.url)}</span></li>)}</ul></details>}
+        <div className="research-approval-box">
+          <label className="check-field"><input type="checkbox" checked={approved} onChange={(event) => onApprovalChange(event.target.checked)} /><span>I confirm these are the cited public sources I want attached to this project at the E1 ceiling.</span></label>
+          <p>OpenRouter and Exa supplied the citation excerpts. SIFT verified exact-text provenance and calculated the preview locally; it did not independently audit each publisher or claim.</p>
+          <div><button className="button primary" disabled={!approved} onClick={onApprove}>Add {draft.result.evidence.length} sources & calculate</button><button className="button secondary" onClick={onPreviewOnly}>Calculate without attaching</button><button className="text-button" onClick={onDiscard}>Discard run</button></div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function QuickRunPreviewPanel({ outcome, onInspect, onDismiss }: {
   outcome: QuickRunOutcomeState;
   onInspect: () => void;
@@ -3326,16 +3744,16 @@ function QuickRunPreviewPanel({ outcome, onInspect, onDismiss }: {
   return (
     <section className={`quick-preview-result ${preview.status}`} aria-labelledby="quick-preview-title">
       <div className="quick-preview-head">
-        <div><p className="eyebrow">AI one-click outcome</p><h1 id="quick-preview-title">{idea.title}</h1><p>{idea.concept}</p></div>
-        <div className="quick-preview-status"><span>AI-assisted preview</span><strong>{statusLabel}</strong><small>Always provisional</small></div>
+        <div><p className="eyebrow">{outcome.research ? "Research & Run outcome" : "AI one-click outcome"}</p><h1 id="quick-preview-title">{idea.title}</h1><p>{idea.concept}</p></div>
+        <div className="quick-preview-status"><span>{outcome.research ? "Cited AI-assisted preview" : "AI-assisted preview"}</span><strong>{statusLabel}</strong><small>Always provisional</small></div>
       </div>
-      <div className="quick-preview-explainer"><strong>Local profile priority selected the idea when needed; AI proposed missing merits and gates; the locked local formula calculated the preview.</strong><span>No evidence was created, upgraded, or verified. Your live review below was not changed.</span></div>
+      <div className="quick-preview-explainer"><strong>Local profile priority selected the idea when needed; AI proposed missing merits and gates; the locked local formula calculated the preview.</strong><span>{outcome.research?.committed ? `${outcome.research.appliedCount} provider-cited public records were added to the live ledger at DeskResearch/E1. They are not customer validation, and AI inputs remain a shadow scenario.` : outcome.research ? "Cited sources were found but not attached. Your live review was not changed." : "No evidence was created, upgraded, or verified. Your live review below was not changed."}</span></div>
       <div className="quick-preview-grid">
         <div><span>Selection</span><strong>{preview.selectedBy === "existing-user-choice" ? "Your selected idea" : "Automated exploration match"}</strong><small>Local profile priority {preview.selectionPriority.toFixed(1)} / 100</small></div>
         <div><span>AI-filled merits</span><strong>{preview.filledClaimIds.length} / {preview.previewReview.claims.length}</strong><small>{preview.missingClaimIds.length} still unknown</small></div>
         <div><span>AI-filled gates</span><strong>{preview.filledGateIds.length} / {preview.previewReview.gates.length}</strong><small>Shadow copy only</small></div>
         <div><span>Protocol route</span><strong>{previewRouteLabel[preview.previewReview.protocolRoute]}</strong><small>{preview.protocolRouteFilled ? `Derived from idea route: ${idea.route}` : "Existing route preserved or still unresolved"}</small></div>
-        <div><span>Existing approved evidence</span><strong>{preview.previewReview.artifacts.length}</strong><small>Nothing synthesized</small></div>
+        <div><span>{outcome.research ? "Cited evidence in preview" : "Existing approved evidence"}</span><strong>{preview.previewReview.artifacts.length}</strong><small>{outcome.research ? `${outcome.research.appliedCount} public E1 record${outcome.research.appliedCount === 1 ? "" : "s"} ${outcome.research.committed ? "attached" : "not attached"}` : "Nothing synthesized"}</small></div>
       </div>
       <div className="quick-preview-metrics">
         <div><span>Preview raw thesis</span><strong>{score.rawThesisScore.toFixed(1)}</strong></div>
@@ -3348,7 +3766,8 @@ function QuickRunPreviewPanel({ outcome, onInspect, onDismiss }: {
         <div><strong>Suggested next experiment</strong><span>{idea.experiment}</span></div>
         {uncertainties.length > 0 && <div><strong>AI-reported uncertainty</strong><ul>{uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></div>}
       </div>
-      <div className="quick-preview-footer"><span>Model {preview.provider} · {preview.model} · Context {preview.sourceInputFingerprint.slice(0, 12)}…</span><div><button className="button primary" onClick={onInspect}>{preview.selectedBy === "existing-user-choice" ? "Open rigorous review" : "Review the chosen idea"}</button><button className="text-button" onClick={onDismiss}>Dismiss preview</button></div></div>
+      {outcome.research && <details className="quick-preview-citations"><summary>{outcome.research.result.citations.length} cited public source{outcome.research.result.citations.length === 1 ? "" : "s"}</summary><ul>{outcome.research.result.citations.map((citation) => <li key={citation.sourceId}><strong>{citation.title}</strong><span>{citationDomain(citation.url)}</span><code>{citation.url}</code></li>)}</ul></details>}
+      <div className="quick-preview-footer"><span>Model {preview.provider} · {preview.model} · Context {preview.sourceInputFingerprint.slice(0, 12)}…</span><div><button className="button primary" onClick={onInspect}>{outcome.research?.committed ? "Open evidence ledger" : preview.selectedBy === "existing-user-choice" ? "Open rigorous review" : "Review the chosen idea"}</button><button className="text-button" onClick={onDismiss}>Dismiss preview</button></div></div>
     </section>
   );
 }
@@ -3385,13 +3804,14 @@ function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, o
   );
 }
 
-function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quickRunBusy, onQuickRun, onGuidedQuickRun, onNavigate, onUpdateProject }: {
+function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quickRunBusy, onResearchRun, onQuickRun, onGuidedQuickRun, onNavigate, onUpdateProject }: {
   state: AppState;
   score: ReturnType<typeof scoreReview>;
   selectedIdea?: IdeaCandidate;
   desktopAvailable: boolean;
   llmReady: boolean;
   quickRunBusy: boolean;
+  onResearchRun: () => void;
   onQuickRun: () => void;
   onGuidedQuickRun: () => void;
   onNavigate: (section: Section) => void;
@@ -3402,13 +3822,14 @@ function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quic
     { id: "review" as const, number: "02", title: "Evaluate what must be true", meta: `${score.assessedClaims}/${score.totalClaims} answered`, done: score.assessedClaims === score.totalClaims },
     { id: "evidence" as const, number: "03", title: "Add proof", meta: `${state.review.artifacts.length} evidence records`, done: state.review.artifacts.length > 0 },
     { id: "results" as const, number: "04", title: "Read the decision", meta: score.official ? (score.numericEligible && score.gateEligible ? "Ready" : "Blocked") : "Provisional", done: score.official },
+    { id: "build" as const, number: "05", title: "Build the winner", meta: selectedIdea ? `${selectedIdea.route} toolchain` : "Choose an idea first", done: false },
   ];
   return (
     <div className="page-section overview-page">
-      <PageHeading eyebrow="Your project" title="Forge better ideas. Prove what holds." description="Move from a blank page to a clear decision without mixing personal preference, AI suggestions, and real evidence." />
+      <PageHeading eyebrow="Workspace" title="Start here." description="Five steps from idea to evidence-backed build." />
       <section className="quick-run-launch">
-        <div><span className="quick-run-kicker">Optional AI automation</span><h2>Get a one-click outcome preview</h2><p>AI generates ideas when needed and proposes missing review inputs. A local profile-priority formula selects the strongest exploration match, then the locked review formula calculates an isolated preview without changing your live review or inventing evidence.</p><small>Generate → Local priority select → AI propose → Locked formula → Provisional outcome · Cloud models confirm before context is sent</small></div>
-        <div><strong>Automatic selection. Locked calculation.</strong><button className="button primary" disabled={quickRunBusy} onClick={onQuickRun}>{quickRunBusy ? "Quick Run working…" : desktopAvailable && llmReady ? "AI one-click preview" : desktopAvailable ? "Connect model to start" : "Open model options"}</button><button className="button secondary quick-guided-button" disabled={quickRunBusy} onClick={onGuidedQuickRun}>Guided review</button></div>
+        <div><span className="quick-run-kicker">One-click research preview</span><h2>From idea to cited provisional outcome.</h2><p>SIFT can select or generate an idea, draft the review, find attributable public evidence, and calculate locally. One consolidated source approval is the only pause.</p></div>
+        <div><button className="button primary" disabled={quickRunBusy} onClick={onResearchRun}>{quickRunBusy ? "Working…" : desktopAvailable && llmReady ? "Research & Run" : desktopAvailable ? "Connect OpenRouter" : "Model options"}</button><button className="button secondary quick-guided-button" disabled={quickRunBusy} onClick={onQuickRun}>Preview only</button><button className="text-button" disabled={quickRunBusy} onClick={onGuidedQuickRun}>Guided review</button><small>OpenRouter web search · model and search charges apply</small></div>
       </section>
       <div className="overview-grid">
         <section className="overview-main">
@@ -3422,10 +3843,224 @@ function Overview({ state, score, selectedIdea, desktopAvailable, llmReady, quic
           </div>
         </section>
         <aside className="overview-aside">
-          <div className="current-thesis"><img className="thesis-mark" src={BRAND_MARK_URL} alt="" aria-hidden="true" /><p className="eyebrow">Current idea</p><h2>{selectedIdea?.title || "No idea selected"}</h2><p>{selectedIdea?.concept || "Generate ideas or add your own, then choose one to evaluate."}</p><button className="button secondary" onClick={() => onNavigate(selectedIdea ? "review" : "ideas")}>{selectedIdea ? "Continue evaluation" : "Find an idea"}</button></div>
-          <div className="boundary-card"><strong>What the app decides</strong><ul><li>Whether inputs are valid</li><li>What the locked formula calculates</li><li>Which caps, floors, and gates block the target stage</li></ul><strong>What humans still decide</strong><ul><li>Whether to invest, launch, or proceed</li><li>Whether evidence is truthful and sufficient</li><li>Whether the team should pursue the idea</li></ul></div>
+          <div className="current-thesis"><img className="thesis-mark" src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" /><p className="eyebrow">Current idea</p><h2>{selectedIdea?.title || "No idea selected"}</h2><p>{selectedIdea?.concept || "Generate ideas or add your own, then choose one to evaluate."}</p><button className="button secondary" onClick={() => onNavigate(selectedIdea ? "review" : "ideas")}>{selectedIdea ? "Continue evaluation" : "Find an idea"}</button></div>
+          <details className="boundary-card"><summary>Decision boundaries</summary><strong>SIFT calculates</strong><ul><li>Input validity, scores, caps, floors, and gates</li></ul><strong>You decide</strong><ul><li>Whether the evidence is truthful and the idea is worth pursuing</li></ul></details>
         </aside>
       </div>
+    </div>
+  );
+}
+
+const BUILD_CATALOG_FALLBACK: BuildCatalogEntry[] = [
+  {
+    id: "evernode-mcp",
+    label: "Evernode MCP",
+    summary: "Contract patterns, starter files, determinism checks, host guidance, and unsigned deployment plans.",
+    kind: "mcp",
+    repositoryUrl: "https://github.com/Hugegreencandle/evernode-mcp",
+    installUrl: "https://github.com/Hugegreencandle/evernode-mcp#installation",
+    capabilities: ["list_templates", "recommend_pattern", "generate_contract", "check_determinism", "check_contract_api"],
+    safety: "Advisory and read-only. Returned files and commands are previews until you approve them.",
+  },
+  {
+    id: "xahau-mcp",
+    label: "Xahau MCP",
+    summary: "Create Hook starters, inspect and simulate WASM, estimate fees, and prepare unsigned transactions.",
+    kind: "mcp",
+    repositoryUrl: "https://github.com/Hugegreencandle/xahau-mcp",
+    installUrl: "https://github.com/Hugegreencandle/xahau-mcp#installation",
+    capabilities: ["scaffold_hook", "hook_report", "analyze_hook"],
+    safety: "SIFT exposes an allowlisted, unsigned subset over local stdio. It never accepts signing secrets.",
+  },
+  {
+    id: "xahc",
+    label: "XAHC",
+    summary: "Author, compile, lint, simulate, and prepare unsigned Xahau Hook builds.",
+    kind: "cli",
+    repositoryUrl: "https://github.com/Hugegreencandle/xahc",
+    installUrl: "https://github.com/Hugegreencandle/xahc#installation",
+    capabilities: ["doctor"],
+    safety: "This first adapter exposes the environment doctor only; signing and submission are intentionally excluded.",
+    platformNote: "Upstream releases currently cover macOS arm64 and Linux x64; Windows requires a custom toolchain.",
+  },
+  {
+    id: "xahc-prover",
+    label: "XAHC Prover",
+    summary: "Attempt bounded invariants against compiled Hook WASM and distinguish proven, counterexample, and inconclusive outcomes.",
+    kind: "companion",
+    repositoryUrl: "https://github.com/Hugegreencandle/xahc-prover",
+    installUrl: "https://github.com/Hugegreencandle/xahc-prover#quick-start",
+    capabilities: [],
+    safety: "A proof applies only to the selected invariant and model scope. INCONCLUSIVE never counts as a pass.",
+    platformNote: "Detection-only in this release while the pinned prover and cross-platform runner are hardened.",
+  },
+];
+
+function BuildWorkspace({ state, score, selectedIdea, desktopAvailable, onNavigate, onToast }: {
+  state: AppState;
+  score: ReturnType<typeof scoreReview>;
+  selectedIdea?: IdeaCandidate;
+  desktopAvailable: boolean;
+  onNavigate: (section: Section) => void;
+  onToast: (message: string) => void;
+}) {
+  const [catalog, setCatalog] = useState<BuildCatalogEntry[]>(BUILD_CATALOG_FALLBACK);
+  const [statuses, setStatuses] = useState<BuildToolStatus[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [running, setRunning] = useState("");
+  const [lastResult, setLastResult] = useState<BuildRunResult | null>(null);
+  const [buildError, setBuildError] = useState("");
+  const [hookArchetype, setHookArchetype] = useState("");
+  const [blockTxType, setBlockTxType] = useState("Payment");
+  const [maxDrops, setMaxDrops] = useState("1000000");
+  const [limitConfirmed, setLimitConfirmed] = useState(false);
+
+  const brief = useMemo(() => {
+    const idea = selectedIdea;
+    return [
+      "# SIFT build brief",
+      "",
+      `Project: ${state.project.title || "Untitled project"}`,
+      `Opportunity boundary: ${state.project.domain || "Not set"}`,
+      `Decision status: ${score.official ? score.numericEligible && score.gateEligible ? "Ready for human build decision" : "Blocked" : "Provisional"}`,
+      `Validated score: ${score.validatedScore.toFixed(1)} / 100`,
+      `Evidence confidence: ${score.evidenceConfidenceIndex.toFixed(1)} / 100`,
+      `Verified coverage: ${score.verifiedEvidenceCoverage.toFixed(1)}%`,
+      `Evidence records: ${state.review.artifacts.length}`,
+      `Review fingerprint: ${score.inputFingerprint}`,
+      "",
+      "## Selected opportunity",
+      idea ? `Title: ${idea.title}\nRoute: ${idea.route}\nConcept: ${idea.concept}\nUser: ${idea.user}\nBuyer: ${idea.buyer}\nCurrent alternative: ${idea.currentAlternative}\nCritical assumption: ${idea.criticalAssumption}\nFirst experiment: ${idea.experiment}` : "No idea selected.",
+      "",
+      "## Guardrails",
+      "- Treat generated code and commands as untrusted previews until reviewed.",
+      "- Never include signing secrets or private keys.",
+      "- SIFT does not sign, submit, spend, lease, or deploy.",
+      "- Use testnet and offline simulation before any live-network step.",
+    ].join("\n");
+  }, [score, selectedIdea, state.project.domain, state.project.title, state.review.artifacts.length]);
+
+  async function refreshTools() {
+    const bridge = window.ideaFoundry?.build;
+    if (!bridge) return;
+    setChecking(true);
+    setBuildError("");
+    try {
+      const [nextCatalog, nextStatuses] = await Promise.all([bridge.getCatalog(), bridge.detect()]);
+      setCatalog(nextCatalog);
+      setStatuses(nextStatuses);
+    } catch (error) {
+      setBuildError(error instanceof Error ? error.message : "Could not inspect the local build toolchain.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!desktopAvailable) return;
+    const timer = window.setTimeout(() => void refreshTools(), 0);
+    return () => window.clearTimeout(timer);
+  }, [desktopAvailable]);
+
+  function toolStatus(id: BuildToolId) {
+    return statuses.find((status) => status.id === id);
+  }
+
+  async function runBuildAction(toolId: BuildToolId, capability: BuildCapability, args: Record<string, unknown> = {}) {
+    const bridge = window.ideaFoundry?.build;
+    if (!bridge) {
+      setBuildError("Local tools run only in the SIFT desktop app.");
+      return;
+    }
+    const key = `${toolId}:${capability}`;
+    setRunning(key);
+    setBuildError("");
+    try {
+      const result = await bridge.run({ toolId, capability, arguments: args });
+      setLastResult(result);
+      onToast(`${catalog.find((item) => item.id === toolId)?.label ?? toolId} finished safely`);
+    } catch (error) {
+      setBuildError(error instanceof Error ? error.message : "The local build action failed.");
+    } finally {
+      setRunning("");
+    }
+  }
+
+  function openBuildRepository(event: React.MouseEvent<HTMLAnchorElement>, url: string) {
+    const bridge = window.ideaFoundry;
+    if (!bridge?.desktop) return;
+    event.preventDefault();
+    void bridge.app.openExternal(url).catch((error: unknown) => {
+      setBuildError(error instanceof Error ? error.message : "That repository could not be opened.");
+    });
+  }
+
+  function scaffoldHook() {
+    if (!hookArchetype) return;
+    const args: Record<string, unknown> = { archetype: hookArchetype };
+    if (hookArchetype === "firewall") args.blockTxType = blockTxType;
+    if (hookArchetype === "payment_limit") args.maxDrops = maxDrops;
+    void runBuildAction("xahau-mcp", "scaffold_hook", args);
+  }
+
+  const xahauRoute = selectedIdea?.route === "Xahau" || selectedIdea?.route === "Both";
+  const evernodeRoute = selectedIdea?.route === "Evernode" || selectedIdea?.route === "Both";
+  const xahauStatus = toolStatus("xahau-mcp");
+  const evernodeStatus = toolStatus("evernode-mcp");
+  const xahcStatus = toolStatus("xahc");
+  const paymentLimitValid = /^(0|[1-9][0-9]*)$/.test(maxDrops) && (() => {
+    try { return BigInt(maxDrops) <= 0x3FFFFFFFFFFFFFFFn; } catch { return false; }
+  })();
+
+  return (
+    <div className="page-section build-page">
+      <PageHeading eyebrow="Build" title="Turn the winner into a working project." description="Move from validated brief to starter code, simulation, and bounded proof—without handing SIFT a wallet key." />
+
+      {!selectedIdea ? (
+        <section className="build-empty"><img src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" /><div><p className="eyebrow">Idea required</p><h2>Choose the opportunity before choosing the toolchain.</h2><p>The route, critical assumption, and first test become the build brief.</p><button className="button primary" onClick={() => onNavigate("ideas")}>Choose an idea</button></div></section>
+      ) : (
+        <>
+          <section className="build-hero">
+            <div><span className={`build-readiness ${score.official && score.numericEligible && score.gateEligible ? "ready" : "provisional"}`}>{score.official && score.numericEligible && score.gateEligible ? "Decision ready" : "Proceed with caution"}</span><p className="eyebrow">Selected opportunity</p><h2>{selectedIdea.title}</h2><p>{selectedIdea.concept}</p></div>
+            <dl><div><dt>Route</dt><dd>{selectedIdea.route}</dd></div><div><dt>Validated</dt><dd>{score.validatedScore.toFixed(1)}</dd></div><div><dt>Confidence</dt><dd>{score.evidenceConfidenceIndex.toFixed(1)}</dd></div><div><dt>Evidence</dt><dd>{state.review.artifacts.length}</dd></div></dl>
+            <div className="build-brief-actions"><button className="button primary" onClick={() => void navigator.clipboard.writeText(brief).then(() => onToast("Build brief copied"))}>Copy build brief</button><button className="button secondary" onClick={() => downloadFile("sift-build-brief.md", brief, "text/markdown")}>Download .md</button></div>
+          </section>
+
+          <section className="build-pipeline" aria-label="Build pipeline">
+            <article><span>01</span><strong>Scaffold</strong><p>Choose an explicit starter pattern from the selected protocol route.</p><small>Evernode MCP / Xahau MCP</small></article>
+            <article><span>02</span><strong>Compile & lint</strong><p>Turn approved source into WASM and surface compiler findings.</p><small>XAHC</small></article>
+            <article><span>03</span><strong>Simulate</strong><p>Run offline first, then opt into read-only testnet comparison.</p><small>XAHC / Xahau MCP</small></article>
+            <article><span>04</span><strong>Prove</strong><p>Test one named invariant and preserve counterexamples or uncertainty.</p><small>XAHC Prover</small></article>
+          </section>
+
+          {!desktopAvailable && <section className="build-desktop-note"><strong>Local tool execution requires SIFT Desktop.</strong><span>The web edition can still export this complete build brief. Desktop runs allowlisted local tools through an isolated bridge—never through the browser or your connected LLM.</span></section>}
+
+          <section className="build-toolchain">
+            <div className="section-title"><div><p className="eyebrow">Local toolchain</p><h2>Four guarded adapters</h2></div>{desktopAvailable && <button className="button small secondary" disabled={checking} onClick={() => void refreshTools()}>{checking ? "Checking…" : "Refresh"}</button>}</div>
+            <div className="build-tool-grid">
+              {catalog.map((tool) => {
+                const status = toolStatus(tool.id);
+                return <article key={tool.id}><div className="build-tool-head"><span className={`tool-dot ${status?.runnable ? "available" : "missing"}`} aria-hidden="true" /><div><strong>{tool.label}</strong><small>{tool.kind}</small></div><b>{!desktopAvailable ? "Desktop" : checking && !status ? "Checking" : status?.runnable ? "Ready" : status?.support === "unsupported" ? "Unsupported" : "Setup needed"}</b></div><p>{tool.summary}</p><span className="tool-message">{status?.message || tool.platformNote || tool.safety}</span><a href={tool.repositoryUrl} target="_blank" rel="noreferrer" onClick={(event) => openBuildRepository(event, tool.repositoryUrl)}>View repository ↗</a></article>;
+              })}
+            </div>
+          </section>
+
+          <section className="build-starters">
+            <div className="section-title"><div><p className="eyebrow">Starter actions</p><h2>Begin with a reviewed artifact.</h2></div><span>No commands are executed from generated output.</span></div>
+            <div className="build-starter-grid">
+              {(xahauRoute || selectedIdea.route === "Neither yet") && <article className="build-starter-card"><div><span className="build-step-chip">Xahau</span><h3>Create a Hook starter</h3><p>Choose the closest explicit archetype. SIFT sends only this allowlisted payload to local Xahau MCP and previews the returned C source.</p></div><label><span>Hook archetype</span><select value={hookArchetype} onChange={(event) => { setHookArchetype(event.target.value); setLimitConfirmed(false); }}><option value="">Choose one…</option><option value="firewall">Transaction firewall</option><option value="payment_limit">Payment limit</option><option value="require_dest_tag">Require destination tag</option><option value="state_counter">State counter</option><option value="notary">Notary</option><option value="accept_all">Minimal accept-all learning starter</option></select></label>{hookArchetype === "firewall" && <label><span>Block transaction type</span><select value={blockTxType} onChange={(event) => setBlockTxType(event.target.value)}>{["Payment", "SetHook", "TrustSet", "OfferCreate", "AccountSet", "URITokenMint", "Import", "Invoke"].map((item) => <option key={item}>{item}</option>)}</select></label>}{hookArchetype === "payment_limit" && <><label><span>Maximum drops</span><input inputMode="numeric" value={maxDrops} onChange={(event) => { setMaxDrops(event.target.value); setLimitConfirmed(false); }} /></label><label className="build-confirm"><input type="checkbox" checked={limitConfirmed} onChange={(event) => setLimitConfirmed(event.target.checked)} /><span>I reviewed this monetary cap. SIFT will not silently choose it for me.</span></label></>}<button className="button primary" disabled={!desktopAvailable || !xahauStatus?.runnable || !hookArchetype || (hookArchetype === "payment_limit" && (!paymentLimitValid || !limitConfirmed)) || running !== ""} onClick={scaffoldHook}>{running === "xahau-mcp:scaffold_hook" ? "Creating starter…" : "Create starter"}</button></article>}
+
+              {(evernodeRoute || selectedIdea.route === "Neither yet") && <article className="build-starter-card"><div><span className="build-step-chip">Evernode</span><h3>Load contract patterns</h3><p>Ask local Evernode MCP for its reviewed starter catalog. Generated files remain previews and are never written or deployed automatically.</p></div><div className="build-assumption"><strong>Build brief anchor</strong><span>{selectedIdea.criticalAssumption || "Add the idea's critical assumption before scaffolding."}</span></div><button className="button primary" disabled={!desktopAvailable || !evernodeStatus?.runnable || running !== ""} onClick={() => void runBuildAction("evernode-mcp", "list_templates", {})}>{running === "evernode-mcp:list_templates" ? "Loading patterns…" : "Load patterns"}</button></article>}
+
+              <article className="build-starter-card diagnostic"><div><span className="build-step-chip">Environment</span><h3>Check the compiler</h3><p>Run the fixed XAHC doctor command. SIFT does not pass renderer-controlled arguments, paths, or shell text.</p></div><button className="button secondary" disabled={!desktopAvailable || !xahcStatus?.runnable || running !== ""} onClick={() => void runBuildAction("xahc", "doctor", {})}>{running === "xahc:doctor" ? "Checking…" : "Run XAHC doctor"}</button></article>
+            </div>
+          </section>
+
+          {(buildError || lastResult) && <section className={`build-output ${buildError ? "error" : "success"}`} aria-live="polite"><div><p className="eyebrow">Local tool result</p><h2>{buildError ? "Action needs attention" : `${catalog.find((item) => item.id === lastResult?.toolId)?.label ?? lastResult?.toolId} · ${lastResult?.capability}`}</h2>{lastResult && <span>Advisory output · {lastResult.durationMs} ms{lastResult.truncated ? " · safely truncated" : ""}</span>}</div>{buildError ? <p>{buildError}</p> : <><pre>{JSON.stringify(lastResult?.output, null, 2)}</pre><div><button className="button secondary" onClick={() => void navigator.clipboard.writeText(JSON.stringify(lastResult?.output, null, 2)).then(() => onToast("Tool output copied"))}>Copy output</button><button className="button secondary" onClick={() => downloadFile("sift-build-result.json", JSON.stringify(lastResult, null, 2), "application/json")}>Download result</button></div></>}</section>}
+
+          <footer className="build-safety"><strong>Unsigned by design</strong><span>SIFT never asks for a seed, private key, signing approval, lease payment, or deployment credential. Generated commands are displayed as untrusted text and are never shell-executed.</span></footer>
+        </>
+      )}
     </div>
   );
 }

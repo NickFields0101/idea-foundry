@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ConnectorError,
   draftEvaluation,
+  extractUrlCitations,
   extractEvidence,
   generateIdeas,
   listModels,
@@ -11,6 +12,8 @@ import {
   normalizeEvaluationProposals,
   normalizeEvidenceProposals,
   normalizeGeneratedIdea,
+  normalizeResearchEvidenceProposals,
+  researchEvidence,
   testConnection,
 } from "../desktop/llm-core.mjs";
 
@@ -120,7 +123,7 @@ test("lists OpenRouter models through the pinned endpoint with required authenti
   );
   assert.equal(request.url, "https://openrouter.ai/api/v1/models");
   assert.equal(request.headers.Authorization, "Bearer openrouter-test-key");
-  assert.equal(request.headers["X-OpenRouter-Title"], "Idea Foundry");
+  assert.equal(request.headers["X-OpenRouter-Title"], "SIFT");
   assert.deepEqual(models, [{ id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }]);
   await assert.rejects(
     listModels({ provider: "openrouter" }, { fetchImpl: async () => jsonResponse({ data: [] }) }),
@@ -534,6 +537,261 @@ test("evidence normalization never allows AI reviewer verification and preserves
   const proposals = normalizeEvidenceProposals(output, source);
   assert.deepEqual(output, before);
   assert.equal(proposals[0].reviewerVerified, false);
+});
+
+test("normalizes only bounded HTTPS provider citation annotations", () => {
+  const oversized = "x".repeat(10_001);
+  const citations = extractUrlCitations({
+    choices: [{
+      message: {
+        annotations: [
+          {
+            type: "url_citation",
+            url_citation: {
+              url: "https://example.org/report?year=2026",
+              title: "Primary report",
+              content: "The published dataset covers 412 participating organizations.",
+            },
+          },
+          {
+            type: "url_citation",
+            url: "https://standards.example/specification",
+            title: "Public specification",
+            content: "The specification defines a signed receipt format.",
+          },
+          {
+            type: "url_citation",
+            url_citation: { url: "http://insecure.example/result", title: "Insecure", content: "Must be ignored." },
+          },
+          {
+            type: "url_citation",
+            url_citation: { url: "https://empty.example/result", title: "Empty", content: "" },
+          },
+          {
+            type: "url_citation",
+            url_citation: { url: "https://oversized.example/result", title: "Oversized", content: oversized },
+          },
+          {
+            type: "model_authored_link",
+            url: "https://invented.example/result",
+            title: "Wrong annotation type",
+            content: "Must be ignored.",
+          },
+        ],
+      },
+    }],
+  });
+
+  assert.equal(citations.length, 2);
+  assert.deepEqual(citations.map(({ sourceId }) => sourceId), ["SRC-001", "SRC-002"]);
+  assert.equal(citations[0].url, "https://example.org/report?year=2026");
+  assert.equal(citations[0].contentSha256.length, 64);
+  assert.doesNotMatch(JSON.stringify(citations), /insecure|empty|oversized|invented/);
+});
+
+test("researches through OpenRouter web search, then maps exact provider excerpts conservatively", async () => {
+  const apiKey = "private-research-key";
+  const projectContext = "A portable service-receipt product for independent operators.";
+  const providerExcerpt = "The published dataset covers 412 participating organizations in 2025.";
+  const contradictoryExcerpt = "The survey found no measurable switching intent among respondents.";
+  const requests = [];
+  const responses = [
+    {
+      choices: [{
+        message: {
+          content: "I found sources, plus https://model-invented.example/not-an-annotation",
+          annotations: [
+            {
+              type: "url_citation",
+              url_citation: {
+                url: "https://data.example.org/annual-report",
+                title: "Annual report",
+                content: providerExcerpt,
+              },
+            },
+            {
+              type: "url_citation",
+              url_citation: {
+                url: "https://research.example.net/switching-survey",
+                title: "Switching survey",
+                content: contradictoryExcerpt,
+              },
+            },
+            {
+              type: "url_citation",
+              url_citation: {
+                url: "https://no-excerpt.example.org/page",
+                title: "No excerpt",
+                content: "",
+              },
+            },
+          ],
+        },
+      }],
+      usage: { server_tool_use: { web_search_requests: 2 } },
+    },
+    {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            evidence: [
+              {
+                title: "Published participation base",
+                sourceId: "SRC-001",
+                sourceUrl: "https://model-invented.example/forged",
+                sourceExcerpt: providerExcerpt,
+                claimIds: ["1C", "NOT-A-CLAIM"],
+                suggestedType: "Payment",
+                suggestedGrade: "E4",
+                direction: "supports",
+                reviewerVerified: true,
+                reasoning: "The public dataset bears on prevalence.",
+                confidence: "high",
+                uncertainty: "Population fit still needs validation.",
+              },
+              {
+                title: "Negative switching signal",
+                sourceId: "SRC-002",
+                sourceExcerpt: contradictoryExcerpt,
+                claimIds: ["2C"],
+                direction: "contradicts",
+                reasoning: "The public survey is a negative signal.",
+                confidence: "medium",
+                uncertainty: "The respondent segment may differ.",
+              },
+              {
+                title: "Invented source",
+                sourceId: "SRC-999",
+                sourceExcerpt: "Fabricated evidence text.",
+                claimIds: ["1A"],
+                direction: "supports",
+              },
+              {
+                title: "Paraphrase instead of excerpt",
+                sourceId: "SRC-001",
+                sourceExcerpt: "About four hundred organizations participated.",
+                claimIds: ["1C"],
+                direction: "supports",
+              },
+            ],
+          }),
+        },
+      }],
+    },
+  ];
+
+  const result = await researchEvidence(
+    { provider: "openrouter", apiKey, model: "provider/research-model" },
+    { projectContext, claimIds: ["1C", "2C"], maxSources: 50 },
+    {
+      now: () => new Date("2026-07-10T12:34:56.000Z"),
+      fetchImpl: async (url, options) => {
+        requests.push({ url: String(url), headers: options.headers, body: JSON.parse(options.body) });
+        return jsonResponse(responses.shift());
+      },
+    },
+  );
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(({ url }) => url), [
+    "https://openrouter.ai/api/v1/chat/completions",
+    "https://openrouter.ai/api/v1/chat/completions",
+  ]);
+  assert.equal(requests[0].headers.Authorization, `Bearer ${apiKey}`);
+  assert.equal(requests[0].body.tool_choice, "required");
+  assert.deepEqual(requests[0].body.provider, { data_collection: "deny", zdr: true });
+  assert.deepEqual(requests[0].body.tools, [{
+    type: "openrouter:web_search",
+    parameters: { engine: "exa", max_results: 10, max_total_results: 10, max_characters: 4000 },
+  }]);
+  assert.deepEqual(requests[1].body.provider, { data_collection: "deny", zdr: true });
+  assert.equal("tools" in requests[1].body, false);
+  assert.match(requests[0].body.messages[1].content, new RegExp(projectContext));
+  assert.doesNotMatch(requests[0].body.messages[0].content, new RegExp(projectContext));
+
+  assert.equal(result.evidence.length, 2);
+  assert.equal(result.evidence[0].sourceUrl, "https://data.example.org/annual-report");
+  assert.equal(result.evidence[0].suggestedType, "DeskResearch");
+  assert.equal(result.evidence[0].suggestedGrade, "E1");
+  assert.equal(result.evidence[0].verificationStatus, "provider_excerpt");
+  assert.equal(result.evidence[0].reviewerVerified, false);
+  assert.deepEqual(result.evidence[0].claimIds, ["1C"]);
+  assert.equal(result.evidence[1].direction, "contradicts");
+  assert.equal(result.provider, "openrouter");
+  assert.equal(result.researchEngine, "exa");
+  assert.equal(result.researchedAt, "2026-07-10T12:34:56.000Z");
+  assert.equal(result.webSearchRequests, 2);
+  assert.equal(result.provisional, true);
+  assert.doesNotMatch(JSON.stringify(result), /private-research-key|model-invented|SRC-999|Fabricated evidence/);
+});
+
+test("cited-evidence normalization accepts only exact excerpts from known source IDs", () => {
+  const citations = [{
+    sourceId: "SRC-001",
+    url: "https://example.org/source",
+    title: "Source",
+    content: "A sufficiently long exact public-source excerpt.",
+    contentSha256: "unused-by-normalizer",
+  }];
+  const normalized = normalizeResearchEvidenceProposals({
+    evidence: [{
+      title: "Cited finding",
+      sourceId: "SRC-001",
+      sourceExcerpt: "A sufficiently long exact public-source excerpt.",
+      claimIds: ["1A"],
+      direction: "supports",
+      reasoning: "Maps to the actor claim.",
+      confidence: "high",
+      uncertainty: "Public evidence is indirect.",
+    }, {
+      title: "Same excerpt, second claim",
+      sourceId: "SRC-001",
+      sourceExcerpt: "A sufficiently long exact public-source excerpt.",
+      claimIds: ["1B"],
+      direction: "supports",
+      reasoning: "The same attributable observation also maps to consequence.",
+      confidence: "medium",
+      uncertainty: "Public evidence is indirect.",
+    }],
+  }, citations, ["1A", "1B"]);
+  assert.equal(normalized.length, 1, "one exact excerpt becomes one evidence artifact");
+  assert.deepEqual(normalized[0].claimIds, ["1A", "1B"]);
+  assert.equal(normalized[0].sourceExcerpt, citations[0].content);
+  assert.equal(normalized[0].sourceUrl, citations[0].url);
+  assert.equal(normalized[0].suggestedGrade, "E1");
+});
+
+test("public research requires OpenRouter and sanitizes research failures", async () => {
+  let called = false;
+  await assert.rejects(
+    researchEvidence(
+      { provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "local" },
+      { projectContext: "Private project context." },
+      { fetchImpl: async () => { called = true; return jsonResponse({}); } },
+    ),
+    /requires OpenRouter/,
+  );
+  assert.equal(called, false);
+
+  const key = "research-key-that-must-not-leak";
+  const context = "sensitive research context";
+  await assert.rejects(
+    researchEvidence(
+      { provider: "openrouter", apiKey: key, model: "provider/model" },
+      { projectContext: context },
+      {
+        fetchImpl: async (url, options) => {
+          throw new Error(`${url} ${options.headers.Authorization} ${options.body}`);
+        },
+      },
+    ),
+    (error) => {
+      assert.match(error.message, /could not be reached/);
+      assert.doesNotMatch(error.message, new RegExp(key));
+      assert.doesNotMatch(error.message, new RegExp(context));
+      return true;
+    },
+  );
 });
 
 test("AI proposal failures do not leak API keys or private context", async () => {

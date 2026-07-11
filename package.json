@@ -1,7 +1,7 @@
 {
-  "name": "xahau-evernode-idea-foundry",
-  "version": "0.5.0",
-  "description": "Local-first deterministic idea generation and evidence validation for Xahau and Evernode.",
+  "name": "xahau-evernode-sift",
+  "version": "0.6.0",
+  "description": "SIFT: local-first deterministic idea generation and evidence validation for Xahau and Evernode.",
   "author": "Nick Fields",
   "private": true,
   "main": "desktop/main.mjs",
@@ -12,8 +12,9 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
+    "preview": "node scripts/preview-local.mjs",
     "pretest": "vinext build",
-    "test": "node --test tests/scoring.test.ts tests/ai-assistance.test.ts tests/quick-run.test.ts tests/model-search.test.ts tests/personality.test.ts tests/llm-core.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs",
+    "test": "node --test tests/scoring.test.ts tests/ai-assistance.test.ts tests/research-run.test.ts tests/quick-run.test.ts tests/model-search.test.ts tests/personality.test.ts tests/llm-core.test.mjs tests/build-tools.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs",
     "desktop:build": "vite build --config vite.desktop.config.ts",
     "desktop:typecheck": "tsc -p tsconfig.desktop.json",
     "predesktop:run": "npm run desktop:build",
@@ -24,6 +25,7 @@
     "desktop:package:win": "node scripts/package-desktop.mjs --platform windows --arch x64",
     "predesktop:package:mac": "npm run desktop:build",
     "desktop:package:mac": "node scripts/package-desktop.mjs --platform mac",
+    "brand:render": "node scripts/render-sift-assets.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop-dist --ignore-pattern release",
     "db:generate": "drizzle-kit generate"
   },
@@ -47,6 +49,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
+    "sharp": "0.34.5",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",
@@ -56,7 +59,7 @@
   "type": "module",
   "build": {
     "appId": "org.xahau.ideafoundry",
-    "productName": "Idea Foundry",
+    "productName": "SIFT",
     "asar": true,
     "directories": {
       "output": "release"
@@ -65,6 +68,7 @@
       "desktop/main.mjs",
       "desktop/preload.cjs",
       "desktop/llm-core.mjs",
+      "desktop/build-tools.mjs",
       "desktop-dist/**/*",
       "package.json",
       "!node_modules/**/*"
@@ -103,21 +107,21 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "artifactName": "Idea-Foundry-${version}-macOS-${arch}.${ext}",
+      "artifactName": "SIFT-${version}-macOS-${arch}.${ext}",
       "minimumSystemVersion": "12.0",
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
     "nsis": {
-      "artifactName": "Idea-Foundry-Setup-${version}-${arch}.${ext}",
+      "artifactName": "SIFT-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
     "portable": {
-      "artifactName": "Idea-Foundry-Portable-${version}-${arch}.${ext}"
+      "artifactName": "SIFT-Portable-${version}-${arch}.${ext}"
     }
   }
 }

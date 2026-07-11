@@ -66,10 +66,10 @@ jobs:
       - name: Upload Windows packages
         uses: actions/upload-artifact@v6
         with:
-          name: idea-foundry-windows-x64
+          name: sift-windows-x64
           path: |
-            release/Idea-Foundry-Setup-*.exe
-            release/Idea-Foundry-Portable-*.exe
+            release/SIFT-Setup-*.exe
+            release/SIFT-Portable-*.exe
             release/*.blockmap
             release/SHA256SUMS-Windows-x64.txt
           if-no-files-found: error
@@ -112,26 +112,26 @@ jobs:
       - name: Inspect and launch the packaged app
         shell: bash
         run: |
-          archive="$(find release -maxdepth 1 -name 'Idea-Foundry-*-macOS-${{ matrix.arch }}.zip' -print -quit)"
-          dmg="$(find release -maxdepth 1 -name 'Idea-Foundry-*-macOS-${{ matrix.arch }}.dmg' -print -quit)"
+          archive="$(find release -maxdepth 1 -name 'SIFT-*-macOS-${{ matrix.arch }}.zip' -print -quit)"
+          dmg="$(find release -maxdepth 1 -name 'SIFT-*-macOS-${{ matrix.arch }}.dmg' -print -quit)"
           test -n "$archive" && test -n "$dmg"
           mkdir smoke-app
           ditto -x -k "$archive" smoke-app
-          app_path="smoke-app/Idea Foundry.app"
-          executable="$app_path/Contents/MacOS/Idea Foundry"
+          app_path="smoke-app/SIFT.app"
+          executable="$app_path/Contents/MacOS/SIFT"
           test -x "$executable"
           binary_archs="$(lipo -archs "$executable")"
           expected_binary_arch="${{ matrix.host_arch }}"
           test "$binary_archs" = "$expected_binary_arch" || { echo "Expected $expected_binary_arch app, got $binary_archs." >&2; exit 1; }
-          "$executable" >idea-foundry-smoke.log 2>&1 &
+          "$executable" >sift-smoke.log 2>&1 &
           app_pid=$!
           cleanup() { kill "$app_pid" >/dev/null 2>&1 || true; wait "$app_pid" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           sleep 8
-          kill -0 "$app_pid" || { cat idea-foundry-smoke.log; exit 1; }
+          kill -0 "$app_pid" || { cat sift-smoke.log; exit 1; }
           mount_output="$(hdiutil attach "$dmg" -nobrowse -readonly)"
           volume="$(printf '%s\n' "$mount_output" | sed -n 's|^.*\(/Volumes/.*\)$|\1|p' | tail -n 1)"
-          test -n "$volume" && test -d "$volume/Idea Foundry.app"
+          test -n "$volume" && test -d "$volume/SIFT.app"
           hdiutil detach "$volume"
       - name: Write macOS checksums
         shell: bash
@@ -141,10 +141,10 @@ jobs:
       - name: Upload macOS packages
         uses: actions/upload-artifact@v6
         with:
-          name: idea-foundry-macos-${{ matrix.arch }}
+          name: sift-macos-${{ matrix.arch }}
           path: |
-            release/Idea-Foundry-*-macOS-${{ matrix.arch }}.dmg
-            release/Idea-Foundry-*-macOS-${{ matrix.arch }}.zip
+            release/SIFT-*-macOS-${{ matrix.arch }}.dmg
+            release/SIFT-*-macOS-${{ matrix.arch }}.zip
             release/*.blockmap
             release/SHA256SUMS-macOS-${{ matrix.arch }}.txt
           if-no-files-found: error
@@ -165,14 +165,14 @@ jobs:
       - name: Download packaged artifacts
         uses: actions/download-artifact@v6
         with:
-          pattern: idea-foundry-*
+          pattern: sift-*
           path: release
           merge-multiple: true
       - name: Write combined release checksums
         shell: bash
         run: |
           cd release
-          sha256sum Idea-Foundry-*.exe Idea-Foundry-*.dmg Idea-Foundry-*.zip > SHA256SUMS.txt
+          sha256sum SIFT-*.exe SIFT-*.dmg SIFT-*.zip > SHA256SUMS.txt
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -180,10 +180,10 @@ jobs:
         run: |
           notes="docs/release-notes-$GITHUB_REF_NAME.md"
           test -f "$notes" || { echo "Missing $notes." >&2; exit 1; }
-          mapfile -t files < <(find release -maxdepth 1 -type f \( -name 'Idea-Foundry-*.exe' -o -name 'Idea-Foundry-*.dmg' -o -name 'Idea-Foundry-*.zip' -o -name 'SHA256SUMS.txt' \) -print | sort)
+          mapfile -t files < <(find release -maxdepth 1 -type f \( -name 'SIFT-*.exe' -o -name 'SIFT-*.dmg' -o -name 'SIFT-*.zip' -o -name 'SHA256SUMS.txt' \) -print | sort)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
-            gh release edit "$GITHUB_REF_NAME" --title "Idea Foundry $GITHUB_REF_NAME" --notes-file "$notes"
+            gh release edit "$GITHUB_REF_NAME" --title "SIFT $GITHUB_REF_NAME" --notes-file "$notes"
           else
-            gh release create "$GITHUB_REF_NAME" "${files[@]}" --title "Idea Foundry $GITHUB_REF_NAME" --notes-file "$notes"
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --title "SIFT $GITHUB_REF_NAME" --notes-file "$notes"
           fi

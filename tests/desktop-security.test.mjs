@@ -24,6 +24,8 @@ test("desktop main process isolates the UI and protects credentials", async () =
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(main, /safeStorage\.encryptString/);
   assert.match(main, /encryptedApiKey/);
+  assert.match(main, /app\.setName\("Idea Foundry"\)/);
+  assert.match(main, /app\.setPath\("userData", path\.join\(app\.getPath\("appData"\), "Idea Foundry"\)\)/);
   assert.doesNotMatch(main, /localStorage|sessionStorage/);
 });
 
@@ -40,7 +42,7 @@ test("AI generation cannot write deterministic review inputs", async () => {
 test("AI one-click Quick Run calculates only an isolated preview", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const quickStart = page.indexOf("async function startQuickRun");
-  const quickEnd = page.indexOf("async function startGuidedQuickRun", quickStart);
+  const quickEnd = page.indexOf("async function startResearchRun", quickStart);
   assert.ok(quickStart >= 0 && quickEnd > quickStart);
   const quickFunction = page.slice(quickStart, quickEnd);
   assert.match(quickFunction, /setQuickRunMode\("auto-preview"\)/);
@@ -59,6 +61,32 @@ test("AI one-click Quick Run calculates only an isolated preview", async () => {
   assert.match(page, /No evidence was created, upgraded, or verified\. Your live review[^<]*not changed/);
   assert.match(page, /Derived from idea route:/);
   assert.match(page, /Existing route preserved or still unresolved/);
+});
+
+test("Research & Run keeps cited evidence transient until one consolidated approval", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const researchStart = page.indexOf("async function startResearchRun");
+  const approvalStart = page.indexOf("function approveResearchRun", researchStart);
+  const previewOnlyStart = page.indexOf("function finishResearchRunWithoutEvidence", approvalStart);
+  assert.ok(researchStart >= 0 && approvalStart > researchStart && previewOnlyStart > approvalStart);
+
+  const researchFunction = page.slice(researchStart, approvalStart);
+  assert.match(researchFunction, /setQuickRunMode\("research"\)/);
+  assert.match(researchFunction, /connection\.bridge\.llm\.researchEvidence\(/);
+  assert.match(researchFunction, /projectContext: publicResearchContextFor\(chosenIdea, projectSnapshot\)/);
+  assert.match(researchFunction, /addResearchToQuickRunPreview\(/);
+  assert.match(researchFunction, /applyResearchEvidenceBatch\(/);
+  assert.match(researchFunction, /setResearchRunDraft\(/);
+  assert.doesNotMatch(researchFunction, /\bsetState\(/, "research must remain transient before approval");
+  assert.doesNotMatch(researchFunction, /reviewerVerified\s*:\s*true|fetch\(/);
+
+  const approvalFunction = page.slice(approvalStart, previewOnlyStart);
+  assert.match(approvalFunction, /researchApproval/);
+  assert.equal((approvalFunction.match(/\bsetState\(/g) ?? []).length, 1, "approval commits the packet atomically");
+  assert.match(approvalFunction, /review: researchRunDraft\.liveReviewWithResearch/);
+  assert.match(page, /I confirm these are the cited public sources I want attached/);
+  assert.match(page, /DeskResearch · E1/);
+  assert.match(page, /Contradictions are never auto-acknowledged/);
 });
 
 test("Guided Quick Run stages AI suggestions and preserves human approval", async () => {
@@ -226,6 +254,8 @@ test("workspace reset and import purge ephemeral AI source material", async () =
   assert.match(resetFunction, /setEvidenceSource\(emptyEvidenceSourceDraft\(\)\)/);
   assert.match(resetFunction, /setEvidenceAnalysis\(null\)/);
   assert.match(resetFunction, /setAiUndo\(null\)/);
+  assert.match(resetFunction, /setResearchRunDraft\(null\)/);
+  assert.match(resetFunction, /setResearchApproval\(false\)/);
   assert.match(resetFunction, /generationRequestRef\.current \+= 1/);
   assert.match(resetFunction, /quickRunRequestRef\.current \+= 1/);
   assert.match(resetFunction, /setGeneratingIdeas\(false\)/);
@@ -291,12 +321,18 @@ test("AI evaluation and evidence IPC exposes proposal-only operations", async ()
   ]);
   assert.match(preload, /draftEvaluation: \(input\) => ipcRenderer\.invoke\(CHANNELS\.draftEvaluation, input\)/);
   assert.match(preload, /extractEvidence: \(input\) => ipcRenderer\.invoke\(CHANNELS\.extractEvidence, input\)/);
+  assert.match(preload, /researchEvidence: \(input\) => ipcRenderer\.invoke\(CHANNELS\.researchEvidence, input\)/);
   assert.doesNotMatch(preload, /updateReview|updateClaim|updateGate|verifyEvidence|writeArtifact/);
   assert.match(main, /draftEvaluation\(config, \{/);
   assert.match(main, /extractEvidence\(config, \{/);
+  assert.match(main, /researchEvidence\(config, \{/);
   assert.match(bridge, /reviewerVerified: false/);
   assert.match(core, /reviewerVerified: false/);
   assert.match(core, /sourceText\.includes\(excerpt\)/);
+  assert.match(core, /type: "openrouter:web_search"/);
+  assert.match(core, /tool_choice: "required"/);
+  assert.match(core, /data_collection: "deny", zdr: true/);
+  assert.doesNotMatch(core, /fetch\(citation|fetch\(sourceUrl|fetch\(item\.sourceUrl/);
   assert.doesNotMatch(core, /scoreReview|calculateGenerationPriority|EVIDENCE_MULTIPLIER/);
 });
 

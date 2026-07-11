@@ -106,6 +106,13 @@ export interface EvidenceArtifact {
     kind: "ai-assisted";
     provider: string;
     model: string;
+    /** Distinguishes user-supplied source organization from public-web research. */
+    mode?: "organized" | "researched";
+    /** Citation metadata is audit provenance only and never raises the evidence grade. */
+    sourceUrl?: string;
+    sourceTitle?: string;
+    retrievedAt?: string;
+    searchProvider?: "openrouter-exa";
   };
 }
 

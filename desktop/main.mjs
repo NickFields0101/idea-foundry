@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, session } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage, session, shell } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,12 +12,25 @@ import {
   listModels,
   normalizeConfig,
   publicError,
+  researchEvidence,
   testConnection,
 } from "./llm-core.mjs";
+import {
+  detectBuildTools,
+  getBuildCatalog,
+  publicBuildError,
+  runBuildTool,
+} from "./build-tools.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Keep Electron's internal identity and user-data directory stable so a SIFT
+// upgrade can decrypt existing OS-keychain-backed AI settings. The packaged
+// product name, executable, window title, and application bundle remain SIFT.
+app.setName("Idea Foundry");
+app.setPath("userData", path.join(app.getPath("appData"), "Idea Foundry"));
 const CHANNELS = Object.freeze({
   version: "idea-foundry:version",
+  openExternal: "idea-foundry:open-external",
   getConfig: "idea-foundry:llm:get-config",
   saveConfig: "idea-foundry:llm:save-config",
   clearConfig: "idea-foundry:llm:clear-config",
@@ -26,7 +39,18 @@ const CHANNELS = Object.freeze({
   generateIdeas: "idea-foundry:llm:generate-ideas",
   draftEvaluation: "idea-foundry:llm:draft-evaluation",
   extractEvidence: "idea-foundry:llm:extract-evidence",
+  researchEvidence: "idea-foundry:llm:research-evidence",
+  buildCatalog: "idea-foundry:build:catalog",
+  buildDetect: "idea-foundry:build:detect",
+  buildRun: "idea-foundry:build:run",
 });
+
+const EXTERNAL_REPOSITORIES = new Set([
+  "/Hugegreencandle/evernode-mcp",
+  "/Hugegreencandle/xahau-mcp",
+  "/Hugegreencandle/xahc",
+  "/Hugegreencandle/xahc-prover",
+]);
 
 let mainWindow = null;
 let configMutationQueue = Promise.resolve();
@@ -149,19 +173,45 @@ function assertTrustedSender(event) {
   }
 }
 
-function safeHandler(handler) {
+function safeHandler(handler, errorMapper = publicError) {
   return async (event, input) => {
     assertTrustedSender(event);
     try {
       return await handler(input);
     } catch (error) {
-      throw new Error(publicError(error));
+      throw new Error(errorMapper(error));
     }
   };
 }
 
+function trustedExternalUrl(value) {
+  if (typeof value !== "string" || value.length > 300) throw new Error("That external link is not allowed.");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("That external link is not allowed.");
+  }
+  if (
+    url.protocol !== "https:"
+    || url.hostname !== "github.com"
+    || url.port
+    || url.username
+    || url.password
+    || url.search
+    || !EXTERNAL_REPOSITORIES.has(url.pathname.replace(/\/$/, ""))
+  ) {
+    throw new Error("That external link is not allowed.");
+  }
+  return url.href;
+}
+
 function registerIpc() {
   ipcMain.handle(CHANNELS.version, safeHandler(async () => app.getVersion()));
+  ipcMain.handle(CHANNELS.openExternal, safeHandler(async (value) => {
+    await shell.openExternal(trustedExternalUrl(value));
+    return true;
+  }, () => "That external link could not be opened."));
   ipcMain.handle(CHANNELS.getConfig, safeHandler(async () => {
     await configMutationQueue;
     return getConfig();
@@ -194,6 +244,17 @@ function registerIpc() {
       sourceLabel: input?.sourceLabel,
     });
   }));
+  ipcMain.handle(CHANNELS.researchEvidence, safeHandler(async (input = {}) => {
+    const config = await resolvedConfig(input);
+    return researchEvidence(config, {
+      projectContext: input?.projectContext,
+      claimIds: input?.claimIds,
+      maxSources: input?.maxSources,
+    });
+  }));
+  ipcMain.handle(CHANNELS.buildCatalog, safeHandler(async () => getBuildCatalog(), publicBuildError));
+  ipcMain.handle(CHANNELS.buildDetect, safeHandler(async () => detectBuildTools(), publicBuildError));
+  ipcMain.handle(CHANNELS.buildRun, safeHandler((input) => runBuildTool(input), publicBuildError));
 }
 
 function hardenSession() {
@@ -208,10 +269,10 @@ function createWindow() {
     height: 920,
     minWidth: 980,
     minHeight: 700,
-    backgroundColor: "#f7f4eb",
+    backgroundColor: "#f4f5f1",
     show: false,
     autoHideMenuBar: true,
-    title: "Idea Foundry",
+    title: "SIFT",
     webPreferences: {
       preload,
       contextIsolation: true,
