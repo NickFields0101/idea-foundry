@@ -8,6 +8,7 @@ const CHANNELS = Object.freeze({
   version: "idea-foundry:version",
   getConfig: "idea-foundry:llm:get-config",
   saveConfig: "idea-foundry:llm:save-config",
+  clearConfig: "idea-foundry:llm:clear-config",
   testConnection: "idea-foundry:llm:test-connection",
   listModels: "idea-foundry:llm:list-models",
   generateIdeas: "idea-foundry:llm:generate-ideas",
@@ -23,6 +24,7 @@ contextBridge.exposeInMainWorld("ideaFoundry", Object.freeze({
   llm: Object.freeze({
     getConfig: () => ipcRenderer.invoke(CHANNELS.getConfig),
     saveConfig: (input) => ipcRenderer.invoke(CHANNELS.saveConfig, input),
+    clearConfig: () => ipcRenderer.invoke(CHANNELS.clearConfig),
     testConnection: (input) => ipcRenderer.invoke(CHANNELS.testConnection, input),
     listModels: (input) => ipcRenderer.invoke(CHANNELS.listModels, input),
     generateIdeas: (input) => ipcRenderer.invoke(CHANNELS.generateIdeas, input),

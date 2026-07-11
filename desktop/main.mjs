@@ -20,6 +20,7 @@ const CHANNELS = Object.freeze({
   version: "idea-foundry:version",
   getConfig: "idea-foundry:llm:get-config",
   saveConfig: "idea-foundry:llm:save-config",
+  clearConfig: "idea-foundry:llm:clear-config",
   testConnection: "idea-foundry:llm:test-connection",
   listModels: "idea-foundry:llm:list-models",
   generateIdeas: "idea-foundry:llm:generate-ideas",
@@ -28,6 +29,7 @@ const CHANNELS = Object.freeze({
 });
 
 let mainWindow = null;
+let configMutationQueue = Promise.resolve();
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 
@@ -118,6 +120,25 @@ async function writeConfig(input = {}) {
   return publicConfig(config, encryptedApiKey);
 }
 
+async function clearConfig() {
+  const target = configPath();
+  try {
+    await Promise.all([
+      fs.rm(target, { force: true }),
+      fs.rm(`${target}.tmp`, { force: true }),
+    ]);
+  } catch {
+    throw new ConnectorError("settings_write", "The local connector settings could not be cleared.");
+  }
+  return publicConfig(normalizeConfig({}), false);
+}
+
+function mutateConfig(operation) {
+  const current = configMutationQueue.then(operation, operation);
+  configMutationQueue = current.then(() => undefined, () => undefined);
+  return current;
+}
+
 function assertTrustedSender(event) {
   if (
     !mainWindow ||
@@ -141,8 +162,12 @@ function safeHandler(handler) {
 
 function registerIpc() {
   ipcMain.handle(CHANNELS.version, safeHandler(async () => app.getVersion()));
-  ipcMain.handle(CHANNELS.getConfig, safeHandler(getConfig));
-  ipcMain.handle(CHANNELS.saveConfig, safeHandler(writeConfig));
+  ipcMain.handle(CHANNELS.getConfig, safeHandler(async () => {
+    await configMutationQueue;
+    return getConfig();
+  }));
+  ipcMain.handle(CHANNELS.saveConfig, safeHandler((input = {}) => mutateConfig(() => writeConfig(input))));
+  ipcMain.handle(CHANNELS.clearConfig, safeHandler(() => mutateConfig(clearConfig)));
   ipcMain.handle(CHANNELS.testConnection, safeHandler(async (input = {}) => testConnection(await resolvedConfig(input))));
   ipcMain.handle(CHANNELS.listModels, safeHandler(async (input = {}) => listModels(
     await resolvedConfig(input),
@@ -159,6 +184,7 @@ function registerIpc() {
     return draftEvaluation(config, {
       projectContext: input?.projectContext,
       claimIds: input?.claimIds,
+      scope: input?.scope,
     });
   }));
   ipcMain.handle(CHANNELS.extractEvidence, safeHandler(async (input = {}) => {

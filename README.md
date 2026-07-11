@@ -8,12 +8,12 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [GitHub Releases](https://github.com/NickFields0101/idea-foundry/releases/latest).
 
-- **Installer:** download `Idea-Foundry-Setup-0.4.0-x64.exe`, double-click it, choose an install folder, and launch Idea Foundry from the desktop or Start menu.
-- **Portable:** download `Idea-Foundry-Portable-0.4.0-x64.exe` and double-click it. It runs without installing anything.
+- **Installer:** download `Idea-Foundry-Setup-0.4.1-x64.exe`, double-click it, choose an install folder, and launch Idea Foundry from the desktop or Start menu.
+- **Portable:** download `Idea-Foundry-Portable-0.4.1-x64.exe` and double-click it. It runs without installing anything.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
-Version `0.4.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
+Version `0.4.1` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
 
 ## Download and install on macOS
 
@@ -61,6 +61,12 @@ The two review assistants are available only in the desktop edition with a conne
 
 If you choose a cloud provider, the relevant idea, review context, or pasted evidence source is sent to that provider for the requested operation. Use Ollama or LM Studio when the material must remain on the device.
 
+## Optional Quick Run
+
+Select **Quick Run** on the welcome screen or Home to start the full workflow with one button. It generates a four-idea slate when needed, pauses for the user to choose the direction, drafts unanswered merit ratings, opens the evidence organizer, refreshes gate recommendations against the current evidence, and then opens the deterministic decision.
+
+Quick Run automates preparation, not approval. It never chooses an idea, applies a merit rating, accepts an evidence record, resolves a gate, or changes the final outcome without a user action. Evidence-free reviews remain explicitly provisional. When a cloud model is connected, Quick Run confirms before it sends a project, notes, or stored evidence excerpts; local Ollama and LM Studio flows stay on the computer.
+
 ## Use the framework
 
 1. Select **Start a project**, **Personalize my ideas**, or **I already have an idea**.
@@ -100,7 +106,7 @@ If you choose a cloud provider, the relevant idea, review context, or pasted evi
 - Choosing OpenRouter sends the displayed prompt and operation-specific context to OpenRouter and the selected upstream model provider. Other remote compatible endpoints receive the same material; the UI warns about these boundaries.
 - Do not enter wallet seeds, regulated personal data, or confidential evidence bodies.
 
-Clearing local data removes the active workspace from that application profile. Export important work first.
+**Clear project** removes the active workspace but keeps the saved AI connection. **Clear everything** also removes the provider, model, and operating-system-protected API key. Export important work first.
 
 ## Development
 
