@@ -81,6 +81,15 @@ function safePublicCitationUrl(value: string) {
   }
 }
 
+function researchSemanticKey(
+  sourceUrl: string,
+  sourceExcerpt: string,
+  direction: "supports" | "contradicts",
+  claimIds: string[],
+) {
+  return [sourceUrl.trim(), sourceExcerpt.trim(), direction, [...claimIds].sort().join(",")].join("\n");
+}
+
 function assertSelection(indexes: number[], proposalCount: number) {
   if (!Array.isArray(indexes) || indexes.length === 0) {
     throw new AiAssistanceError("invalid_selection", "Select at least one grounded public finding.");
@@ -137,6 +146,14 @@ export function applyResearchEvidenceBatch(
     citationById.set(sourceId, citation);
   }
 
+  const existingFindings = new Set(input.review.artifacts.flatMap((artifact) => {
+    const sourceUrl = artifact.ingestionOrigin?.sourceUrl;
+    const excerpt = artifact.sourceExcerpt;
+    return sourceUrl && excerpt
+      ? [researchSemanticKey(sourceUrl, excerpt, artifact.direction, artifact.rubricClaimIds)]
+      : [];
+  }));
+  const appliedProposalIndexes: number[] = [];
   const selectedBySource = new Map<string, Array<{ proposalIndex: number; proposal: ResearchEvidenceResult["evidence"][number] }>>();
   for (const proposalIndex of input.selectedProposalIndexes) {
     const proposal = input.result.evidence[proposalIndex];
@@ -155,6 +172,14 @@ export function applyResearchEvidenceBatch(
         `Public finding ${proposalIndex + 1} is not grounded in its provider-returned citation excerpt.`,
       );
     }
+    const semanticKey = researchSemanticKey(
+      proposal.sourceUrl,
+      proposal.sourceExcerpt,
+      proposal.direction,
+      proposal.claimIds,
+    );
+    if (existingFindings.has(semanticKey)) continue;
+    appliedProposalIndexes.push(proposalIndex);
     const group = selectedBySource.get(sourceId) ?? [];
     group.push({ proposalIndex, proposal });
     selectedBySource.set(sourceId, group);
@@ -230,7 +255,7 @@ export function applyResearchEvidenceBatch(
     previousReview,
     artifacts,
     linkedClaimIds: [...linkedClaimIds],
-    appliedProposalIndexes: [...input.selectedProposalIndexes],
+    appliedProposalIndexes,
   };
 }
 
@@ -261,5 +286,28 @@ export function addResearchToQuickRunPreview(
       status: previewStatus(previewScore),
     } satisfies QuickRunPreview,
     applied,
+  };
+}
+
+/**
+ * Completes the evidence and decision portion of an automated run without weakening
+ * the evidence boundary. Every provider-grounded finding is attached atomically,
+ * remains unverified DeskResearch/E1, and is then passed through the locked scorer.
+ */
+export function completeAutomatedResearchRun(
+  preview: QuickRunPreview,
+  result: ResearchEvidenceResult,
+  calculateScore: QuickRunScoreCalculator,
+) {
+  const selectedProposalIndexes = result.evidence.map((_, index) => index);
+  const completed = addResearchToQuickRunPreview(
+    preview,
+    result,
+    selectedProposalIndexes,
+    calculateScore,
+  );
+  return {
+    ...completed,
+    selectedProposalIndexes: completed.applied.appliedProposalIndexes,
   };
 }

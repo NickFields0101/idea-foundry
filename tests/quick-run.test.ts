@@ -157,7 +157,7 @@ test("one-click preview is isolated and preserves every evidence and human-owned
   assert.equal(firstClaim.grade, "E2");
   assert.deepEqual(firstClaim.evidenceClaimIds, ["EC-001"]);
   assert.deepEqual(firstClaim.evidenceArtifactIds, ["A-001"]);
-  assert.equal(firstClaim.note, "Human note must survive.");
+  assert.match(firstClaim.note ?? "", /^Human note must survive\.[\s\S]*AI-assisted input/);
 
   const humanGate = result.previewReview.gates.find((gate) => gate.id === "G2");
   assert.ok(humanGate);
@@ -166,7 +166,8 @@ test("one-click preview is isolated and preserves every evidence and human-owned
   assert.equal(result.previewReview.protocolRoute, "hybrid");
   assert.equal(result.protocolRouteFilled, true);
   assert.deepEqual(result.filledClaimIds, ["1A", "2A"]);
-  assert.deepEqual(result.filledGateIds, ["G1", "G3"]);
+  assert.deepEqual(result.filledGateIds, ["G1"]);
+  assert.match(result.previewReview.claims.find((claim) => claim.claimId === "2A")?.note ?? "", /AI-assisted input \(openrouter\/test\/model/);
 });
 
 test("missing, duplicate, unknown, and invalid proposals cannot silently complete a preview", () => {
@@ -264,16 +265,17 @@ test("existing human merits, gates, and protocol route always beat AI proposals"
   assert.ok(!result.filledGateIds.includes("G1"));
 });
 
-test("conditional AI gates remain visibly incomplete instead of receiving fabricated human conditions", () => {
+test("conditional AI gates remain unresolved instead of receiving fabricated human conditions", () => {
   const result = preview();
   const conditional = result.previewReview.gates.find((gate) => gate.id === "G3") as GateAssessment;
 
-  assert.equal(conditional.status, "conditional");
+  assert.equal(conditional.status, "unresolved");
   assert.equal(conditional.owner, "");
   assert.equal(conditional.deadline, "");
   assert.equal(conditional.expectedArtifact, "");
   assert.equal(conditional.passThreshold, "");
   assert.equal(conditional.killThreshold, "");
-  assert.ok(result.previewScore.validationErrors.some((error) => error.includes("G3 conditional is missing")));
+  assert.ok(!result.filledGateIds.includes("G3"));
+  assert.ok(!result.previewScore.validationErrors.some((error) => error.includes("G3 conditional")));
   assert.equal(result.status, "preview_incomplete");
 });

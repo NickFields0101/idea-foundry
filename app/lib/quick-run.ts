@@ -46,7 +46,6 @@ export type QuickRunScoreCalculator = (review: ReviewInput) => ScoreOutput;
 
 const PREVIEW_GATE_DECISIONS = new Set<GateStatus>([
   "pass",
-  "conditional",
   "fail",
 ]);
 
@@ -133,7 +132,13 @@ export function buildQuickRunPreview(
     const proposal = claimProposals.get(claim.claimId);
     if (!proposal || !validSuggestedMerit(proposal.suggestedMerit)) return claim;
     filledClaimIds.push(claim.claimId);
-    return { ...claim, merit: proposal.suggestedMerit };
+    const uncertainty = proposal.uncertainty.trim();
+    const provenance = `AI-assisted input (${input.draft.provider}/${input.draft.model}; ${proposal.confidence} confidence): ${proposal.reasoning.trim() || "No reasoning supplied."}${uncertainty ? ` Uncertainty: ${uncertainty}` : ""}`;
+    return {
+      ...claim,
+      merit: proposal.suggestedMerit,
+      note: claim.note?.trim() ? `${claim.note.trim()}\n\n${provenance}` : provenance,
+    };
   });
 
   const filledGateIds: QuickRunPreview["filledGateIds"] = [];

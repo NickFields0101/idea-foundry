@@ -22,12 +22,12 @@ test("server-renders the completed SIFT landing page", async () => {
   const html = await response.text();
   assert.match(html, /<title>Find what holds \| SIFT<\/title>/i);
   assert.match(html, /Find what holds\./);
-  assert.match(html, /Generate ideas, challenge assumptions/i);
-  assert.match(html, /Start with AI/);
+  assert.match(html, /One action generates the idea/i);
+  assert.match(html, /Run Everything/);
   assert.match(html, /Start manually/);
   assert.match(html, /Personalize ideas/);
   assert.match(html, /I already have an idea/);
-  assert.match(html, /No account · Deterministic scoring/);
+  assert.match(html, /No SIFT account · Deterministic scoring · OpenRouter only when you run AI/);
   assert.match(html, /Use light mode/);
   assert.match(html, /data-theme="dark"/i);
   assert.match(html, /sift-brand-tornado\.png/i);
@@ -47,7 +47,8 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
 
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
   assert.match(page, /changes idea generation and ranking only—never evidence or the final decision score/i);
-  assert.match(page, /AI output stays editable and never becomes evidence or a score automatically/i);
+  assert.match(page, /Run Everything/);
+  assert.match(page, /AI automates the workflow—not truth/i);
   assert.match(page, /OpenRouter/);
   assert.match(page, /Paste your OpenRouter API key/);
   assert.match(page, /queueModelSearch/);

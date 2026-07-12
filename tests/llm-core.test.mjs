@@ -325,6 +325,7 @@ test("generates ideas through OpenRouter without exposing its key in output", as
   assert.equal(request.headers.Authorization, "Bearer openrouter-test-key");
   assert.equal(request.body.model, "openai/gpt-4.1-mini");
   assert.equal(request.body.stream, false);
+  assert.deepEqual(request.body.provider, { data_collection: "deny", zdr: true });
   assert.equal(result.provider, "openrouter");
   assert.equal(result.ideas[0].title, "Portable service proof");
   assert.doesNotMatch(JSON.stringify(result), /openrouter-test-key/);
@@ -804,6 +805,7 @@ test("AI proposal failures do not leak API keys or private context", async () =>
       {
         fetchImpl: async (url, options) => {
           assert.equal(options.headers.Authorization, `Bearer ${key}`);
+          assert.deepEqual(JSON.parse(options.body).provider, { data_collection: "deny", zdr: true });
           assert.doesNotMatch(options.body, new RegExp(key));
           throw new Error(`${url} ${options.headers.Authorization} ${context}`);
         },

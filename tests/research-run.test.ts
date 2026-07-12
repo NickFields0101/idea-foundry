@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ResearchEvidenceResult } from "../app/desktop-bridge";
-import type { ClaimAssessment, ReviewInput } from "../app/lib/scoring";
+import type { ClaimAssessment, ReviewInput, ScoreOutput } from "../app/lib/scoring";
 
 const researchModuleUrl = new URL("../app/lib/research-run.ts", import.meta.url).href;
 const assistanceModuleUrl = new URL("../app/lib/ai-assistance.ts", import.meta.url).href;
-const { applyResearchEvidenceBatch } = await import(researchModuleUrl) as typeof import("../app/lib/research-run");
+const quickRunModuleUrl = new URL("../app/lib/quick-run.ts", import.meta.url).href;
+const { applyResearchEvidenceBatch, completeAutomatedResearchRun } = await import(researchModuleUrl) as typeof import("../app/lib/research-run");
 const { AiAssistanceError, sourceContentSha256 } = await import(assistanceModuleUrl) as typeof import("../app/lib/ai-assistance");
+const { buildQuickRunPreview } = await import(quickRunModuleUrl) as typeof import("../app/lib/quick-run");
 
 const claim = (claimId: string): ClaimAssessment => ({
   claimId,
@@ -124,6 +126,63 @@ test("one consolidated research approval atomically adds capped E1 records with 
   assert.equal(applied.review.claims[0].evidenceArtifactIds.length, 1, "supporting evidence is linked");
   assert.equal(applied.review.claims[1].grade, "E0", "contradicting evidence never raises a grade");
   assert.deepEqual(applied.review.claims[1].acknowledgedCounterEvidenceIds, [], "counterevidence is never auto-acknowledged");
+});
+
+test("automated research attaches every grounded finding and recalculates without inventing verification", () => {
+  const review = reviewFixture();
+  const result = researchFixture();
+  const calculate = (input: ReviewInput) => ({
+    official: input.artifacts.length > 0,
+    numericAndGateEligible: false,
+    inputFingerprint: `artifacts-${input.artifacts.length}`,
+  }) as ScoreOutput;
+  const preview = buildQuickRunPreview({
+    baseReview: review,
+    draft: {
+      claims: [],
+      gates: [],
+      provider: "openrouter",
+      model: result.model,
+      provisional: true,
+    },
+    selectedIdeaId: "idea-1",
+    selectedBy: "automated-priority",
+    selectionPriority: 72,
+    ideaRoute: "Both",
+    sourceInputFingerprint: "research-context-1",
+    createdAt: "2026-07-10T12:00:00.000Z",
+  }, calculate);
+
+  const completed = completeAutomatedResearchRun(preview, result, calculate);
+
+  assert.deepEqual(completed.selectedProposalIndexes, [0, 1]);
+  assert.equal(completed.applied.artifacts.length, 2);
+  assert.equal(completed.preview.previewReview.artifacts.length, 2);
+  assert.equal(completed.preview.previewScore.inputFingerprint, "artifacts-2");
+  assert.ok(completed.applied.artifacts.every((artifact) => artifact.grade === "E1"));
+  assert.ok(completed.applied.artifacts.every((artifact) => artifact.reviewerVerified === false));
+  assert.deepEqual(completed.preview.previewReview.claims[1].acknowledgedCounterEvidenceIds, []);
+
+  const repeated = completeAutomatedResearchRun(completed.preview, result, calculate);
+  assert.deepEqual(repeated.selectedProposalIndexes, []);
+  assert.equal(repeated.applied.artifacts.length, 0);
+  assert.equal(repeated.preview.previewReview.artifacts.length, 2, "a repeated run does not duplicate cited findings");
+
+  const tamperedRepeat = researchFixture();
+  tamperedRepeat.citations[0].contentSha256 = "tampered";
+  assert.throws(
+    () => completeAutomatedResearchRun(completed.preview, tamperedRepeat, calculate),
+    (error) => code(error) === "invalid_source",
+    "an all-duplicate packet is still fully provenance-validated",
+  );
+
+  const changedMeaning = researchFixture();
+  changedMeaning.evidence[0].direction = "contradicts";
+  assert.throws(
+    () => completeAutomatedResearchRun(completed.preview, changedMeaning, calculate),
+    (error) => code(error) === "invalid_selection",
+    "a repeated excerpt with changed meaning is surfaced as a conflict rather than silently deduplicated",
+  );
 });
 
 test("research application fails closed for stale, tampered, upgraded, or private-network findings", async (t) => {

@@ -292,7 +292,7 @@ const GATE_LABELS: Record<GateId, string> = {
   G8: "Stage safety",
 };
 
-const GATE_DUE_STAGE: Record<GateId, number> = {
+export const GATE_DUE_STAGE: Record<GateId, number> = {
   G1: 0,
   G2: 0,
   G3: 1,

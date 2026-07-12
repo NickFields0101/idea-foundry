@@ -73,17 +73,30 @@ The two review assistants are available only in the desktop edition with a conne
 
 If you choose a cloud provider, the relevant idea, review context, or pasted evidence source is sent to that provider for the requested operation. Use Ollama or LM Studio when the material must remain on the device.
 
-## Optional Quick Run
+## Run Everything: the one-shot workflow
 
-Select **Start with AI** on the welcome screen or **Run preview** on Home to ask a connected model to generate ideas when needed and propose values for unanswered merit claims and unresolved gates. When the user has not already selected an idea, SIFT’s local profile-priority formula chooses the strongest saved exploration match. The app applies AI proposals only to an isolated copy of the review, derives an unresolved protocol route from the chosen idea’s declared Xahau/Evernode route when possible, then its locked local formula calculates a provisional outcome preview.
+In the desktop app, connect OpenRouter once and choose **Run Everything**. SIFT then completes the full sequence without stage approvals:
+
+1. Generate four ideas when no idea is selected and use the local profile-priority formula to choose the strongest exploration match.
+2. Ask the model to evaluate all unanswered rubric claims and non-compensable gates.
+3. Search public sources, accept only exact provider-cited excerpts, and automatically attach every grounded finding at `DeskResearch / E1`.
+4. Re-evaluate the idea against that evidence and run the locked deterministic calculator.
+
+The final project update is atomic: the generated slate, selected idea, AI-tagged evaluation, cited evidence, and calculated outcome are saved together only after every stage succeeds. One undo restores the complete pre-run idea, project, and review state. The result remains an **AI-automated thesis screen**, not a human-verified investment or launch decision. Public research cannot manufacture interviews, commitments, payments, tests, audits, production behavior, or E2–E4 proof. Contradictory evidence stays visible and unacknowledged, so the honest automated outcome may be **HOLD / incomplete**.
+
+The Run Everything button itself is the instruction to use the configured OpenRouter model and web search; there are no additional confirmation dialogs during the run. Model-token and search charges apply. The public search brief excludes personality scores, wallet data, stored customer identities, and private evidence bodies, while an evaluation of an existing review may include a bounded set of its stored evidence excerpts.
+
+## Optional preview and guided modes
+
+Select **Preview only** on Home to ask a connected model to generate ideas when needed and propose values for unanswered merit claims and unresolved gates. When the user has not already selected an idea, SIFT’s local profile-priority formula chooses the strongest saved exploration match. The app applies AI proposals only to an isolated copy of the review, derives an unresolved protocol route from the chosen idea’s declared Xahau/Evernode route when possible, then its locked local formula calculates a provisional outcome preview.
 
 The preview does not modify the live review, apply an official rating or gate decision, create evidence, or verify evidence. Existing human decisions and evidence are preserved, and missing evidence remains missing. The result is always labeled provisional; the AI proposes inputs, while the deterministic engine—not the model—calculates the displayed outcome. Users can inspect the selected idea and complete the normal evidence-backed review separately. **Guided review** remains available for people who prefer to approve each checkpoint themselves.
 
 When a cloud model is connected, Quick Run confirms before sending the operation-specific idea and review context. Local Ollama and LM Studio flows stay on the computer. A Quick Run never sends raw personality-test answers; exact derived scores are included only if the user enabled the separate personality-sharing option.
 
-## Optional Research & Run
+## Optional manual source review
 
-**Research & Run** is the fastest evidence-aware path. With a connected OpenRouter model, one start action can generate or select an idea, draft missing review inputs in an isolated copy, search public sources, map exact citation excerpts to a bounded set of publicly researchable rubric claims, and calculate a provisional deterministic outcome. SIFT then pauses once for one consolidated source review.
+Choose **Review sources manually** from Evidence when you want the older checkpointed research path. It generates or selects an idea, drafts missing inputs in an isolated copy, searches public sources, maps exact citation excerpts to a bounded set of publicly researchable rubric claims, and then pauses for one consolidated source review before the live project changes.
 
 The research connector uses OpenRouter's current [`openrouter:web_search` server tool](https://openrouter.ai/docs/guides/features/server-tools/web-search) with the Exa engine and fixed result/context limits. It does not use the deprecated web plugin and never fetches arbitrary citation URLs itself. A source can enter the approval packet only when OpenRouter returns an HTTPS `url_citation` annotation with nonempty provider-supplied content and the proposed excerpt occurs exactly in that content. URLs written only in model prose are ignored.
 
@@ -106,9 +119,9 @@ Upstream XAHC releases currently cover macOS arm64 and Linux x86_64; Windows req
 
 ## Use the framework
 
-1. Select **Start with AI**, **Start manually**, **Personalize ideas**, or **I already have an idea**.
+1. Select **Run Everything** for the one-shot workflow, or choose a manual starting point.
 2. Generate ideas with a connected model, add your own, try the examples, or copy the prompt into any LLM.
-3. Choose one idea, use **Research & Run** for a cited provisional outcome, use **Preview only** for an evidence-free shadow calculation, or continue through Guided review. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
+3. Choose **Run Everything** to generate/select, evaluate, research, and calculate automatically. Use **Preview only**, **Guided mode**, or **Review sources manually** when you want a narrower or checkpointed flow. Optional 0–100 exploration estimates only order the idea list; they are not validated scores.
 4. Open **Evaluate**, choose the target stage and archetype, and assess all 51 atomic claims with merit from 0–5. In the desktop app, you may ask the connected model to draft unanswered claim merits and gate recommendations, then approve only the useful proposals.
 5. Open **Evidence**, attach proof manually, use the desktop organizer with pasted source text, or select **Find public evidence** to enter Research & Run. Public findings stay E1; the validator checks type ceilings, dates, verification, claim links, duplicates, and counterevidence.
 6. Resolve the eight non-compensable gates.

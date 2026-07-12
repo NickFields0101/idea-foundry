@@ -518,6 +518,14 @@ function systemPrompt(count) {
   return `Return only valid JSON with one top-level key named "ideas" containing exactly ${count} objects. Each object must contain title, concept, user, buyer, triggeringSituation, currentAlternative, materialConsequence, protocolNeed, failureReason, criticalAssumption, experiment, route, and scores. route must be Xahau, Evernode, Both, or Neither yet. scores must contain personalFit (or null), opportunitySignal, protocolAffordance, and experimentability from 0 to 100. These are exploration hypotheses, never evidence or validated scores. Do not invent interviews, commitments, payments, benchmarks, audits, or protocol facts.`;
 }
 
+const OPENROUTER_PRIVATE_ROUTING = Object.freeze({ data_collection: "deny", zdr: true });
+
+function privacyRoutingFor(config) {
+  return config.provider === "openrouter"
+    ? { provider: OPENROUTER_PRIVATE_ROUTING }
+    : {};
+}
+
 export async function generateIdeas(configInput, prompt, count = 8, { fetchImpl = fetch, timeoutMs = 180_000 } = {}) {
   const config = normalizeConfig(configInput);
   if (!config.model) throw new ConnectorError("missing_model", "Choose a model before generating ideas.");
@@ -531,7 +539,7 @@ export async function generateIdeas(configInput, prompt, count = 8, { fetchImpl 
   const path = config.provider === "ollama" ? "api/chat" : "chat/completions";
   const body = config.provider === "ollama"
     ? { model: config.model, messages, stream: false, format: "json", options: { temperature: 0.7 } }
-    : { model: config.model, messages, stream: false, temperature: 0.7 };
+    : { model: config.model, messages, stream: false, temperature: 0.7, ...privacyRoutingFor(config) };
   const raw = await request(config, path, { method: "POST", headers: headersFor(config, true), body: JSON.stringify(body) }, fetchImpl, timeoutMs);
   const payload = parseJson(raw);
   const ideas = extractIdeaArray(extractModelContent(config, payload))
@@ -586,7 +594,7 @@ async function runProposalTask(configInput, messages, { fetchImpl = fetch, timeo
   const path = config.provider === "ollama" ? "api/chat" : "chat/completions";
   const body = config.provider === "ollama"
     ? { model: config.model, messages, stream: false, format: "json", options: { temperature: 0.1 } }
-    : { model: config.model, messages, stream: false, temperature: 0.1 };
+    : { model: config.model, messages, stream: false, temperature: 0.1, ...privacyRoutingFor(config) };
   const raw = await request(
     config,
     path,
@@ -968,7 +976,6 @@ export async function researchEvidence(
   const projectContext = normalizeUserText(input?.projectContext, "Project context", MAX_PROMPT_CHARS);
   const requestedClaimIds = normalizeRequestedClaimIds(input?.claimIds);
   const maxSources = normalizeResearchSourceCount(input?.maxSources);
-  const privateRouting = { data_collection: "deny", zdr: true };
   const searchMessages = [
     { role: "system", content: researchSystemPrompt() },
     {
@@ -985,7 +992,7 @@ export async function researchEvidence(
     messages: searchMessages,
     stream: false,
     temperature: 0.1,
-    provider: privateRouting,
+    provider: OPENROUTER_PRIVATE_ROUTING,
     tools: [{
       type: "openrouter:web_search",
       parameters: {
@@ -1025,7 +1032,7 @@ export async function researchEvidence(
     messages: extractionMessages,
     stream: false,
     temperature: 0.1,
-    provider: privateRouting,
+    provider: OPENROUTER_PRIVATE_ROUTING,
   };
   const extractionPayload = parseJson(await request(
     config,

@@ -45,7 +45,7 @@ test("AI generation cannot write deterministic review inputs", async () => {
 test("AI one-click Quick Run calculates only an isolated preview", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const quickStart = page.indexOf("async function startQuickRun");
-  const quickEnd = page.indexOf("async function startResearchRun", quickStart);
+  const quickEnd = page.indexOf("async function startOneShotRun", quickStart);
   assert.ok(quickStart >= 0 && quickEnd > quickStart);
   const quickFunction = page.slice(quickStart, quickEnd);
   assert.match(quickFunction, /setQuickRunMode\("auto-preview"\)/);
@@ -55,7 +55,7 @@ test("AI one-click Quick Run calculates only an isolated preview", async () => {
   assert.match(quickFunction, /calculateGenerationPriority\(state\.profile, chosenIdea\.scores\)/);
   assert.match(quickFunction, /const previewReview = selectedAtStart \? state\.review : freshQuickPreviewReview\(state\.review\)/);
   assert.match(quickFunction, /buildQuickRunPreview\([^]*scoreReview\)/);
-  assert.match(quickFunction, /setQuickRunOutcome\(\{ preview, idea: chosenIdea \}\)/);
+  assert.match(quickFunction, /setQuickRunOutcome\(\{ kind: "preview", preview, idea: chosenIdea \}\)/);
   assert.match(quickFunction, /setState\(\(current\) => \(\{ \.\.\.current, ideas: \[\.\.\.current\.ideas, \.\.\.candidates\] \}\)\)/);
   assert.equal((quickFunction.match(/\bsetState\(/g) ?? []).length, 1);
   assert.doesNotMatch(quickFunction, /applyEvaluationProposals|applyEvidenceProposals|applyGateProposal|updateReview|updateClaim|updateGate|setSelectedEvaluationClaims|reviewerVerified\s*:\s*true/);
@@ -64,6 +64,37 @@ test("AI one-click Quick Run calculates only an isolated preview", async () => {
   assert.match(page, /No evidence was created, upgraded, or verified\. Your live review[^<]*not changed/);
   assert.match(page, /Derived from idea route:/);
   assert.match(page, /Existing route preserved or still unresolved/);
+});
+
+test("Run Everything completes one atomic AI-assisted workflow without stage approvals", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const start = page.indexOf("async function startOneShotRun");
+  const end = page.indexOf("async function startResearchRun", start);
+  assert.ok(start >= 0 && end > start);
+  const oneShot = page.slice(start, end);
+
+  assert.match(oneShot, /setQuickRunMode\("one-shot"\)/);
+  assert.match(oneShot, /bridge\.llm\.generateIdeas\(/);
+  assert.match(oneShot, /bridge\.llm\.draftEvaluation\(/);
+  assert.match(oneShot, /bridge\.llm\.researchEvidence\(/);
+  assert.match(oneShot, /completeAutomatedResearchRun\(/);
+  assert.match(oneShot, /evidenceAwareReevaluationBase\(/);
+  assert.match(oneShot, /const finalPreview = await draftEvaluationFor/);
+  assert.match(oneShot, /review: finalReview/);
+  assert.match(oneShot, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(nextState\)\)/);
+  assert.match(oneShot, /setState\(nextState\)/);
+  assert.ok(
+    oneShot.indexOf("localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState))")
+      < oneShot.indexOf("setState(nextState)"),
+    "durable local persistence is checked before the live React state is committed",
+  );
+  assert.equal((oneShot.match(/\bsetState\(/g) ?? []).length, 1, "the live project is committed once after all stages finish");
+  assert.match(oneShot, /project: stateAtCommit\.project/);
+  assert.match(oneShot, /ideas: stateAtCommit\.ideas/);
+  assert.match(oneShot, /committed: true/);
+  assert.doesNotMatch(oneShot, /window\.confirm|reviewerVerified\s*:\s*true|acknowledgedCounterEvidenceIds/);
+  assert.match(page, /Generate idea → Evaluate → Evidence → Decision/);
+  assert.match(page, /AI automates the workflow—not truth/);
 });
 
 test("Research & Run keeps cited evidence transient until one consolidated approval", async () => {
@@ -176,8 +207,8 @@ test("raw personality responses are session-only and excluded from projects and 
   assert.match(exportPacket, /\.\.\.\(includeProfile \? \{ profile: state\.profile \} : \{\}\)/);
   assert.doesNotMatch(exportPacket, /personalityAnswers|PERSONALITY_DRAFT_KEY|sessionStorage/);
 
-  const promptStart = page.indexOf("const prompt = useMemo");
-  const promptEnd = page.indexOf("const visibleModels", promptStart);
+  const promptStart = page.indexOf("function generationPromptFor");
+  const promptEnd = page.indexOf("function recordFrom", promptStart);
   assert.ok(promptStart >= 0 && promptEnd > promptStart);
   const promptBuilder = page.slice(promptStart, promptEnd);
   assert.match(promptBuilder, /sharePersonalityScoresWithAi/);
