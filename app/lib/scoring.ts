@@ -1,7 +1,7 @@
 import rubricData from "./rubric.json" with { type: "json" };
 import type { PersonalityProfileResult } from "./personality";
 
-export const ENGINE_VERSION = "v3-powershell-parity/1.0.2";
+export const ENGINE_VERSION = "v3-powershell-parity/1.1.0";
 export const FRAMEWORK_VERSION = "v3";
 export const RUBRIC_MANIFEST_SHA256 =
   "fa940feea694ee4df4aa064d2fc418e68a879f318c11e72cfbc4bf5a9d1c1d67";

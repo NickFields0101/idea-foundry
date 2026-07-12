@@ -8,12 +8,12 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [SIFT Releases](https://github.com/NickFields0101/sift/releases/latest).
 
-- **Installer:** download `SIFT-Setup-0.6.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
-- **Portable:** download `SIFT-Portable-0.6.0-x64.exe` and double-click it. It runs without installing anything.
+- **Installer:** download `SIFT-Setup-0.7.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
+- **Portable:** download `SIFT-Portable-0.7.0-x64.exe` and double-click it. It runs without installing anything.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
-Version `0.6.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
+Version `0.7.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
 
 ## Download and install on macOS
 
@@ -134,7 +134,7 @@ Upstream XAHC releases currently cover macOS arm64 and Linux x86_64; Windows req
 ## Scoring integrity
 
 - Framework: `v3`
-- Engine: `v3-powershell-parity/1.0.2`
+- Engine: `v3-powershell-parity/1.1.0`
 - Canonical claims: `51`
 - Archetype weights: exactly `100` for Application, Enterprise, Protocol/Infrastructure, and Marketplace/DePIN
 - Rubric manifest SHA-256: `fa940feea694ee4df4aa064d2fc418e68a879f318c11e72cfbc4bf5a9d1c1d67`
