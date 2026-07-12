@@ -84,7 +84,6 @@ function brandAssetUrl(filename: string) {
     : `/brand/${filename}`;
 }
 
-const SIFT_MARK_URL = brandAssetUrl("sift-mark.svg");
 const SIFT_HERO_URL = brandAssetUrl("sift-hero.png");
 const SIFT_BRAND_TORNADO_URL = brandAssetUrl("sift-brand-tornado.png");
 const SIFT_WORDMARK_LIGHT_URL = brandAssetUrl("sift-wordmark-light.png");
@@ -3329,7 +3328,7 @@ export default function Home() {
                 : "Guided Quick Run automates safe setup and pauses for idea choice, merit approval, real evidence, and every gate decision."}
             />
             <section className="quick-run-working" aria-live="polite">
-              <img src={SIFT_MARK_URL} alt="" aria-hidden="true" />
+              <img src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" />
               <div><span>{quickRunBusy ? "Working" : quickRunMode === "one-shot" && quickRunMessage.startsWith("Run stopped:") ? "Stopped" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next checkpoint."}</h2><p>{quickRunMode === "one-shot" ? "Fresh ideas → Public context → Thesis screen → Discovery decision" : quickRunMode === "research" ? "Idea → Evaluation → Public research → Cited preview" : "Idea → Evaluation → Evidence → Gates → Decision"}</p></div>
               {quickRunBusy && <i aria-hidden="true" />}
             </section>
@@ -3436,7 +3435,7 @@ export default function Home() {
             ) : (
               <>
                 <div className="model-safety-strip">
-                  <img src={SIFT_MARK_URL} alt="" aria-hidden="true" />
+                  <img src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" />
                   <div><strong>Manual mode keeps every checkpoint.</strong><span>Use these controls to review AI drafts individually, or choose Generate & screen on Home for the automated idea workflow.</span></div>
                 </div>
 

@@ -58,6 +58,9 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   assert.match(page, /Turn the winner into a working project/);
   assert.match(page, /bridge\.run\(\{ toolId, capability, arguments: args \}\)/);
   assert.match(page, /className="current-thesis"[^\n]+SIFT_BRAND_TORNADO_URL/);
+  assert.match(page, /className="quick-run-working"[^]*?<img src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.match(page, /className="model-safety-strip"[^]*?<img src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.doesNotMatch(page, /SIFT_MARK_URL/);
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);
   assert.match(layout, /sift-theme-v1/);
