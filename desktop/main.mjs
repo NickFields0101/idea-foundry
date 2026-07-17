@@ -27,10 +27,9 @@ import {
 } from "./intelligence-bridge.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Keep Electron's internal identity and user-data directory stable so a SIFT
-// upgrade can decrypt existing OS-keychain-backed AI settings. The packaged
-// product name, executable, window title, and application bundle remain SIFT.
-app.setName("Idea Foundry");
+// Keep the legacy user-data directory stable so existing SIFT installations
+// can still decrypt OS-keychain-backed AI settings after the product rename.
+app.setName("SIFT");
 const stableUserDataPath = path.join(app.getPath("appData"), "Idea Foundry");
 mkdirSync(stableUserDataPath, { recursive: true });
 app.setPath("userData", stableUserDataPath);

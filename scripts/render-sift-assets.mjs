@@ -54,8 +54,7 @@ const socialBackdrop = Buffer.from(`
     <circle cx="355" cy="454" r="299" fill="none" stroke="#222821" stroke-width="2"/>
     <text x="785" y="385" fill="#f7f8f5" font-family="Arial, Helvetica, sans-serif" font-size="214" font-weight="800" letter-spacing="24">SIFT</text>
     <rect x="1075" y="430" width="116" height="20" rx="10" fill="#91f22e"/>
-    <text x="798" y="522" fill="#91f22e" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700" letter-spacing="8">XAHAU + EVERNODE</text>
-    <text x="798" y="628" fill="#aeb5aa" font-family="Arial, Helvetica, sans-serif" font-size="49" font-weight="400">Find what holds.</text>
+    <text x="798" y="570" fill="#aeb5aa" font-family="Arial, Helvetica, sans-serif" font-size="56" font-weight="400">Find what holds.</text>
   </svg>
 `);
 const socialMark = await sharp(markSource)

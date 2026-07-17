@@ -1,4 +1,4 @@
-# SIFT — Xahau + Evernode
+# SIFT
 
 SIFT is a local-first, optional-AI venture workspace for Xahau and Evernode projects. It moves a founder from a broad search profile to falsifiable candidates, helps organize a review, calculates stage readiness with a locked 51-claim rubric, and carries the selected opportunity into a guarded local Build workspace.
 
@@ -8,12 +8,12 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [SIFT Releases](https://github.com/NickFields0101/sift/releases/latest).
 
-- **Installer:** download `SIFT-Setup-0.10.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
-- **Portable:** download `SIFT-Portable-0.10.0-x64.exe` and double-click it. It runs without installing anything.
+- **Installer:** download `SIFT-Setup-0.11.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
+- **Portable:** download `SIFT.exe` and double-click it. It runs without installing anything.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
-Version `0.10.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
+Version `0.11.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
 
 ## Download and install on macOS
 
@@ -176,7 +176,7 @@ Upstream XAHC releases currently cover macOS arm64 and Linux x86_64; Windows req
 - Choosing OpenRouter sends the displayed prompt and operation-specific context to OpenRouter and the selected upstream model provider. Other remote compatible endpoints receive the same material; the UI warns about these boundaries.
 - Do not enter wallet seeds, regulated personal data, or confidential evidence bodies.
 
-**Clear project** removes the active workspace but keeps the saved AI connection. **Clear everything** also removes the provider, model, and operating-system-protected API key. Export important work first.
+**Clear local data** in Settings removes the active workspace, profile, provider, model, and operating-system-protected API key. Export important work first.
 
 ## Development
 

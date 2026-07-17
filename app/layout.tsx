@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const productName = "SIFT — Xahau + Evernode";
+const productName = "SIFT";
 const title = `Find what holds | SIFT`;
 const description =
   "Generate, challenge, and review Xahau and Evernode ideas with deterministic scoring, evidence validation, and local-first privacy.";

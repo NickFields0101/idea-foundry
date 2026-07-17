@@ -1,6 +1,6 @@
 {
-  "name": "xahau-evernode-sift",
-  "version": "0.10.0",
+  "name": "sift",
+  "version": "0.11.0",
   "description": "SIFT: local-first deterministic idea generation and evidence validation for Xahau and Evernode.",
   "author": "Nick Fields",
   "homepage": "https://github.com/NickFields0101/sift#readme",
@@ -37,11 +37,9 @@
     "predesktop:package:mac": "npm run desktop:build && npm run intelligence:build && npm run intelligence:smoke",
     "desktop:package:mac": "node scripts/package-desktop.mjs --platform mac",
     "brand:render": "node scripts/render-sift-assets.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop-dist --ignore-pattern release",
-    "db:generate": "drizzle-kit generate"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop-dist --ignore-pattern release"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"
@@ -54,7 +52,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "electron": "^43.1.0",
     "electron-builder": "^26.15.3",
     "eslint": "9.39.4",
@@ -142,7 +139,7 @@
       "createStartMenuShortcut": true
     },
     "portable": {
-      "artifactName": "SIFT-Portable-${version}-${arch}.${ext}"
+      "artifactName": "SIFT.${ext}"
     }
   }
 }

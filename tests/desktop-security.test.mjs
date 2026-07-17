@@ -25,7 +25,7 @@ test("desktop main process isolates the UI and protects credentials", async () =
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(main, /safeStorage\.encryptString/);
   assert.match(main, /encryptedApiKey/);
-  assert.match(main, /app\.setName\("Idea Foundry"\)/);
+  assert.match(main, /app\.setName\("SIFT"\)/);
   assert.match(main, /const stableUserDataPath = path\.join\(app\.getPath\("appData"\), "Idea Foundry"\)/);
   assert.match(main, /mkdirSync\(stableUserDataPath, \{ recursive: true \}\)[^]*app\.setPath\("userData", stableUserDataPath\)/);
   assert.doesNotMatch(main, /idea-foundry:/);
@@ -486,12 +486,17 @@ test("OpenRouter keys stay encrypted, provider-bound, and pinned to OpenRouter",
 });
 
 test("tag builds cannot publish before the release workflow validates every platform", async () => {
-  const [packager, workflow] = await Promise.all([
+  const [packager, workflow, packageText] = await Promise.all([
     readFile(new URL("../scripts/package-desktop.mjs", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/desktop-release.yml", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
+  const packageJson = JSON.parse(packageText);
   assert.match(packager, /publish:\s*["']never["']/);
+  assert.match(packager, /name\.toLowerCase\(\) === "sift\.exe"/);
+  assert.equal(packageJson.build.portable.artifactName, "SIFT.${ext}");
   assert.match(workflow, /name: Lint source[^]*run: npm run lint/);
-  assert.match(workflow, /name: Launch packaged app with a clean profile[^]*SIFT-Portable-\*\.exe[^]*Get-Process -Name SIFT[^]*SIFT exited during the clean-profile launch check[^]*Stop-Process/);
+  assert.match(workflow, /name: Launch packaged app with a clean profile[^]*release\/SIFT\.exe[^]*Get-Process -Name SIFT[^]*SIFT exited during the clean-profile launch check[^]*Stop-Process/);
+  assert.match(workflow, /release\/SIFT\.exe[^]*sha256sum SIFT\.exe SIFT-Setup-\*\.exe/);
   assert.match(workflow, /publish:[^]*needs:[^]*- windows[^]*- macos/);
 });

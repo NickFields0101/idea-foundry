@@ -72,7 +72,7 @@ jobs:
         run: |
           $env:APPDATA = Join-Path $env:RUNNER_TEMP "sift-clean-appdata"
           New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
-          $executable = Get-ChildItem -LiteralPath release -Filter "SIFT-Portable-*.exe" | Select-Object -First 1
+          $executable = Get-Item -LiteralPath release/SIFT.exe -ErrorAction SilentlyContinue
           if ($null -eq $executable) { throw "The SIFT portable executable was not found." }
           $before = @(Get-Process -Name SIFT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
           $launcher = Start-Process -FilePath $executable.FullName -PassThru -WindowStyle Hidden
@@ -101,7 +101,7 @@ jobs:
           name: sift-windows-x64
           path: |
             release/SIFT-Setup-*.exe
-            release/SIFT-Portable-*.exe
+            release/SIFT.exe
             release/*.blockmap
             release/SHA256SUMS-Windows-x64.txt
           if-no-files-found: error
@@ -210,7 +210,7 @@ jobs:
         shell: bash
         run: |
           cd release
-          sha256sum SIFT-*.exe SIFT-*.dmg SIFT-*.zip > SHA256SUMS.txt
+          sha256sum SIFT.exe SIFT-Setup-*.exe SIFT-*.dmg SIFT-*.zip > SHA256SUMS.txt
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -218,7 +218,7 @@ jobs:
         run: |
           notes="docs/release-notes-$GITHUB_REF_NAME.md"
           test -f "$notes" || { echo "Missing $notes." >&2; exit 1; }
-          mapfile -t files < <(find release -maxdepth 1 -type f \( -name 'SIFT-*.exe' -o -name 'SIFT-*.dmg' -o -name 'SIFT-*.zip' -o -name 'SHA256SUMS.txt' \) -print | sort)
+          mapfile -t files < <(find release -maxdepth 1 -type f \( -name 'SIFT.exe' -o -name 'SIFT-Setup-*.exe' -o -name 'SIFT-*.dmg' -o -name 'SIFT-*.zip' -o -name 'SHA256SUMS.txt' \) -print | sort)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
             gh release edit "$GITHUB_REF_NAME" --title "SIFT $GITHUB_REF_NAME" --notes-file "$notes"

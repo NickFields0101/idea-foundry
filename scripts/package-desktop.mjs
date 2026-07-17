@@ -57,13 +57,13 @@ function isDeliverable(name) {
   if (requestedPlatform === "mac") {
     return /^SIFT-.+-macOS-(?:x64|arm64)\.(?:dmg|zip)(?:\.blockmap)?$/i.test(name);
   }
-  return /^SIFT-(?:Setup|Portable)-.+\.(?:exe|blockmap)$/i.test(name);
+  return name.toLowerCase() === "sift.exe" || /^SIFT-Setup-.+\.exe(?:\.blockmap)?$/i.test(name);
 }
 
 function assertDeliverables(generated) {
   if (requestedPlatform === "windows") {
     if (!generated.some((name) => /Setup.+\.exe$/i.test(name))) throw new Error("The Windows installer was not generated.");
-    if (!generated.some((name) => /Portable.+\.exe$/i.test(name))) throw new Error("The portable executable was not generated.");
+    if (!generated.some((name) => name.toLowerCase() === "sift.exe")) throw new Error("The portable executable was not generated.");
     return;
   }
   for (const arch of archNames) {

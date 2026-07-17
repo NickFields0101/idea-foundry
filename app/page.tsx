@@ -3475,7 +3475,7 @@ export default function Home() {
   function exportPacket() {
     const packet = {
       manifest: {
-        product: "SIFT — Xahau + Evernode",
+        product: "SIFT",
         frameworkVersion: FRAMEWORK_VERSION,
         engineVersion: ENGINE_VERSION,
         rubricManifestSha256: score.rubricManifestSha256,
@@ -3534,7 +3534,6 @@ export default function Home() {
       <main className="start-page">
         <header className="start-header">
           <Brand theme={theme} />
-          <div className="start-header-actions"><span className="privacy-pill"><span aria-hidden="true">●</span> Local by default</span><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} /></div>
         </header>
         <section className="hero">
           <div className="hero-copy">
@@ -3546,11 +3545,6 @@ export default function Home() {
                 : <button className="button primary" onClick={startQuickFromWelcome}>Create to build <span aria-hidden="true">→</span></button>}
               <button className="button secondary" onClick={startWithIdea}>I already have an idea</button>
             </div>
-            <details className="hero-more-ways">
-              <summary>More ways to start</summary>
-              <div><button className="text-button" onClick={() => start("neutral")}>Work step by step</button><button className="text-button" onClick={() => start("private")}>Use my profile</button></div>
-            </details>
-            <p className="trust-line">No account · Local by default · AI suggests, SIFT scores, you decide.</p>
           </div>
           <aside className="hero-art" aria-label="SIFT tornado artwork">
             <img className="hero-mark" src={SIFT_HERO_URL} alt="" aria-hidden="true" />
@@ -3570,8 +3564,8 @@ export default function Home() {
   ];
   const utilityNavigation: Array<{ id: Section; label: string; meta?: string }> = [
     { id: "profile", label: "Profile" },
-    { id: "model", label: "AI settings" },
-    { id: "export", label: "Data" },
+    { id: "model", label: "App & AI" },
+    { id: "export", label: "Import & export" },
   ];
   const mobilePrimaryNavigation = primaryNavigation.filter((item) => item.id !== "build");
   const mobileUtilityNavigation = [primaryNavigation.find((item) => item.id === "build")!, ...utilityNavigation.map((item) => ({ ...item, target: item.id, active: [item.id] }))];
@@ -3588,7 +3582,6 @@ export default function Home() {
             onChange={(event) => setState((current) => ({ ...current, project: { ...current.project, title: event.target.value } }))}
           />
         </div>
-        <div className="header-actions"><div className="header-status"><span className="saved-dot" /> Saved locally</div><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} /></div>
       </header>
 
       <aside className="side-rail">
@@ -3613,18 +3606,6 @@ export default function Home() {
             ))}
           </nav>
         </details>
-        <div className="rail-footer">
-          <span className="rail-local-status"><i aria-hidden="true" /> Local workspace</span>
-          <details className="rail-data-controls">
-            <summary>Data controls</summary>
-            <div className="rail-clear-actions">
-            <button className="text-button danger" disabled={clearingLocalData} onClick={() => {
-              if (window.confirm("Clear this project? Your saved AI connection will be kept.")) clearProjectData();
-            }}>Clear project</button>
-            <button className="text-button danger" disabled={clearingLocalData} onClick={() => void clearAllLocalData()}>{clearingLocalData ? "Clearing…" : "Clear everything"}</button>
-            </div>
-          </details>
-        </div>
       </aside>
 
       <section className="workspace">
@@ -3801,7 +3782,7 @@ export default function Home() {
 
         {section === "model" && (
           <div className="page-section narrow">
-            <PageHeading eyebrow="AI settings" title="Connect AI once." description="Choose a cloud or local model, then run SIFT from Home." />
+            <PageHeading eyebrow="Settings" title="Set up SIFT." description="Manage your AI connection, appearance, and local data in one place." />
             {desktopAvailable === false ? (
               <section className="desktop-required-card">
                 <span className="desktop-required-mark">DESKTOP</span>
@@ -3984,6 +3965,16 @@ export default function Home() {
                 </section>
               </>
             )}
+            <section className="app-settings-card" aria-label="App settings">
+              <div className="app-settings-row">
+                <div><p className="eyebrow">Appearance</p><h2>Theme</h2><p>Choose the view that feels best on this computer.</p></div>
+                <ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === "dark" ? "light" : "dark")} />
+              </div>
+              <div className="app-settings-row app-settings-danger">
+                <div><p className="eyebrow">Local data</p><h2>Reset SIFT</h2><p>Remove this project, profile, AI connection, and protected API key from this computer.</p></div>
+                <button className="button secondary danger-action" disabled={clearingLocalData} onClick={() => void clearAllLocalData()}>{clearingLocalData ? "Clearing…" : "Clear local data"}</button>
+              </div>
+            </section>
           </div>
         )}
 

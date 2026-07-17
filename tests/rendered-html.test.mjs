@@ -24,11 +24,8 @@ test("server-renders the completed SIFT landing page", async () => {
   assert.match(html, /Find an idea worth building\./);
   assert.match(html, /SIFT generates ideas, chooses the strongest one/i);
   assert.match(html, /Create to build/);
-  assert.match(html, /Work step by step/);
-  assert.match(html, /Use my profile/);
   assert.match(html, /I already have an idea/);
-  assert.match(html, /No account · Local by default · AI suggests, SIFT scores, you decide\./);
-  assert.match(html, /Use light mode/);
+  assert.doesNotMatch(html, /More ways to start|No account · Local by default|Use light mode/);
   assert.match(html, /data-theme="dark"/i);
   assert.match(html, /sift-brand-tornado\.png/i);
   assert.match(html, /sift-wordmark-light\.png/i);
@@ -48,6 +45,10 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
   assert.match(page, /interests and working style shape suggestions—not the final decision/i);
   assert.match(page, /Create to build/);
+  assert.match(page, /PageHeading eyebrow="Settings" title="Set up SIFT\."/);
+  assert.match(page, /Clear local data/);
+  assert.equal((page.match(/<ThemeToggle\b/g) ?? []).length, 1, "theme control must only render in Settings");
+  assert.doesNotMatch(page, /Saved locally|Data controls|More ways to start/);
   assert.match(page, /Create → Compare → Research → Decide → Build-ready/);
   assert.match(page, /Start building/);
   assert.match(page, /New ideas start with no customer evidence/i);
