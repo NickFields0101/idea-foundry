@@ -21,13 +21,13 @@ test("server-renders the completed SIFT landing page", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Find what holds \| SIFT<\/title>/i);
-  assert.match(html, /Find what holds\./);
-  assert.match(html, /One action generates fresh business ideas/i);
-  assert.match(html, /Generate (?:&amp;|&) screen/);
-  assert.match(html, /Start manually/);
-  assert.match(html, /Personalize ideas/);
+  assert.match(html, /Find an idea worth testing\./);
+  assert.match(html, /SIFT generates ideas, chooses the strongest one/i);
+  assert.match(html, /Generate (?:&amp;|&) check/);
+  assert.match(html, /Work step by step/);
+  assert.match(html, /Use my profile/);
   assert.match(html, /I already have an idea/);
-  assert.match(html, /No SIFT account · Deterministic thesis screening · Validation starts honestly at zero/);
+  assert.match(html, /No account · Local by default · AI suggests, SIFT scores, you decide\./);
   assert.match(html, /Use light mode/);
   assert.match(html, /data-theme="dark"/i);
   assert.match(html, /sift-brand-tornado\.png/i);
@@ -46,18 +46,22 @@ test("keeps deterministic scoring, privacy separation, and the social asset wire
   ]);
 
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY/);
-  assert.match(page, /changes idea generation and ranking only—never evidence or the final decision score/i);
-  assert.match(page, /Generate & screen/);
-  assert.match(page, /No customer evidence is expected yet/i);
+  assert.match(page, /interests and working style shape suggestions—not the final decision/i);
+  assert.match(page, /Generate & check/);
+  assert.match(page, /New ideas start with no customer evidence/i);
   assert.match(page, /screenThesis\(state\.review\)/);
   assert.match(page, /OpenRouter/);
   assert.match(page, /Paste your OpenRouter API key/);
   assert.match(page, /queueModelSearch/);
   assert.match(page, /Type 4\.8, Opus, Sonnet, Llama/);
   assert.match(page, /scoreReview\(state\.review\)/);
-  assert.match(page, /Turn the winner into a working project/);
+  assert.match(page, /Build the idea/);
   assert.match(page, /bridge\.run\(\{ toolId, capability, arguments: args \}\)/);
-  assert.match(page, /className="current-thesis"[^\n]+SIFT_BRAND_TORNADO_URL/);
+  assert.match(page, /className="brand-tornado" src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.match(page, /className="build-empty"[^]*?<img src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.match(page, /className="quick-run-working"[^]*?<img src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.match(page, /className="model-safety-strip"[^]*?<img src=\{SIFT_BRAND_TORNADO_URL\}/);
+  assert.doesNotMatch(page, /SIFT_MARK_URL/);
   assert.match(page, /computed fields are ignored/i);
   assert.match(layout, /NEXT_PUBLIC_SITE_URL/);
   assert.match(layout, /sift-theme-v1/);

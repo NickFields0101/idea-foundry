@@ -8,12 +8,12 @@ No account or ChatGPT sign-in is required in the desktop edition.
 
 Download the latest files from [SIFT Releases](https://github.com/NickFields0101/sift/releases/latest).
 
-- **Installer:** download `SIFT-Setup-0.7.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
-- **Portable:** download `SIFT-Portable-0.7.0-x64.exe` and double-click it. It runs without installing anything.
+- **Installer:** download `SIFT-Setup-0.9.0-x64.exe`, double-click it, choose an install folder, and launch SIFT from the desktop or Start menu.
+- **Portable:** download `SIFT-Portable-0.9.0-x64.exe` and double-click it. It runs without installing anything.
 
 No app account, wallet, ChatGPT sign-in, or AI connection is required. The app works immediately with manual ideas and the starter slate. Connecting Ollama, LM Studio, OpenRouter, or another compatible model is optional. Choosing OpenRouter requires the user's own OpenRouter account, API key, and credits.
 
-Version `0.7.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
+Version `0.9.0` is not yet code-signed, so Windows SmartScreen may display an **Unknown publisher** warning. Verify the download against `SHA256SUMS.txt` on the release page before choosing **More info** and **Run anyway**. Organizations distributing the app broadly should code-sign future builds.
 
 ## Download and install on macOS
 
@@ -37,6 +37,8 @@ The packaged desktop app runs locally and supports:
 - API credentials encrypted through the operating system
 
 The renderer has no direct network authority. A narrow, isolated desktop bridge handles configuration, connection testing, model discovery, idea generation, optional review assistants, and bounded OpenRouter public research. Local providers are restricted to loopback addresses.
+
+Generate & Screen uses SIFT's supervised Python intelligence engine for two bounded jobs. **Idea Forge** first frames distinct actor/problem mechanisms, generates a wider slate, and then runs a separate critique-and-revision pass. After selection, the engine performs competitor mapping, assumption analysis, and red-teaming. Python runs as a private sidecar process with no listening port and returns only provisional structured hypotheses. TypeScript validates every result, applies the deterministic idea-construction gate, removes near-duplicates, and remains the sole authority for project state, evidence policy, scoring, gates, and decisions. The Windows and macOS packages embed the worker, so users do not install Python or Docker.
 
 The interface includes persistent light and dark modes. Theme preference is stored separately from project and model data.
 
@@ -80,9 +82,13 @@ SIFT separates two jobs that must not be scored as if they were the same thing:
 1. **Explore:** generate a new business hypothesis and decide whether it is worth testing.
 2. **Validate:** collect real-world evidence after the idea exists and decide whether it has earned stage advancement.
 
-In the desktop app, connect any supported model and choose **Generate & screen**. SIFT always generates four fresh candidates, uses the local profile-priority formula to choose the strongest exploration match, and asks the model to rate the specificity, coherence, and falsifiability of all 51 thesis hypotheses. Missing hypotheses receive low thesis merit; the model is explicitly forbidden from pretending that interviews, commitments, payments, tests, production behavior, or audits already happened.
+In the desktop app, connect any supported model and choose **Generate & screen**. The one visible action runs an ordered internal workflow: opportunity framing, divergent candidate generation, independent critique and revision, local schema and thesis-construction checks, duplicate removal, weighted profile ordering, public context when available, and the deterministic thesis screen. The order is deliberate: the model does not get to invent a shallow idea and grade that same first draft as if it were finished.
 
-With OpenRouter, SIFT may also gather exact-citation public context about markets, alternatives, regulation, and protocol capabilities. That context may change the AI's hypothesis assessment, but it is not written into the direct-validation ledger and cannot raise the deterministic thesis score through an evidence multiplier. Local and other compatible models simply skip public web context.
+Every final candidate must name a specific actor and trigger, the current workflow, a material consequence, an economic buyer, a reachable first distribution wedge, adoption friction, a conventional implementation counterfactual, the exact Xahau/Evernode job if one exists, the largest failure case, one atomic assumption, and a structured 1â€“14 day test with a metric plus pass and kill thresholds. Xahau and Evernode are grounded in a bounded capability contract. A conventional `Neither yet` route is validâ€”and preferredâ€”when a ledger or independently hosted consensus service does not create a real advantage.
+
+SIFT then uses the local profile-priority formula to choose the strongest *eligible* exploration match and asks the model to rate the specificity, coherence, and falsifiability of all 51 thesis hypotheses. Missing hypotheses receive low thesis merit; the model is explicitly forbidden from pretending that interviews, commitments, payments, tests, production behavior, or audits already happened. Idea-construction quality is deterministic but intentionally narrow: it measures whether a thesis is specific and testable, not whether the business will succeed.
+
+With OpenRouter, SIFT may also gather exact-citation public context about markets, alternatives, regulation, and protocol capabilities. The local Python intelligence engine then maps alternatives, attacks fatal assumptions, and proposes disconfirming tests using the idea and any supplied public excerpts. Local and other compatible models skip web retrieval but can still perform the provisional competitor/red-team pass. These analyses may inform the model's hypothesis assessment, but they are not written into the direct-validation ledger and cannot raise the deterministic thesis score through an evidence multiplier.
 
 The locked thesis screen returns **Advance to validation**, **Revise & rescreen**, **Park this idea**, or **Screen incomplete**. Its formula uses raw hypothesis merit plus the G1, G2, and G7 screen gates. It never requires customer evidence. The generated slate, selected idea, and thesis screen are saved atomically, and one undo restores the prior project.
 
@@ -185,6 +191,17 @@ npm run desktop:build
 npm run desktop:run
 ```
 
+Python intelligence validation and native-worker packaging:
+
+```bash
+npm run intelligence:test
+python -m pip install pyinstaller==6.21.0
+npm run intelligence:build
+npm run intelligence:smoke
+```
+
+Python is required only for development and release builds. Normal desktop packages include the native worker.
+
 Create Windows installer and portable packages:
 
 ```bash
@@ -213,6 +230,8 @@ npm test
 - `desktop/main.mjs` — isolated Electron main process and secure configuration store
 - `desktop/preload.cjs` — narrow allowlisted renderer bridge
 - `desktop/llm-core.mjs` — provider-neutral connector, validation, and output normalization
+- `desktop/intelligence-bridge.mjs` — supervised JSONL worker lifecycle, validation, progress, cancellation, and secret boundary
+- `desktop/intelligence_worker/` — bounded Python competitor and red-team engine; never the scoring authority
 - `desktop/build-tools.mjs` — fixed local-tool catalog, detection, validation, and bounded MCP/CLI adapters
 - `desktop/renderer/` — local desktop entry point with strict content security policy
 - `tests/scoring.test.ts` — parity, caps, evidence, privacy-invariance, and determinism fixtures

@@ -1,3 +1,10 @@
+import type { IntelligenceRunInput } from "./lib/intelligence-client";
+export type {
+  CompetitorRedTeamRunInput,
+  IdeaForgeRunInput,
+  IntelligenceRunInput,
+} from "./lib/intelligence-client";
+
 export type LlmProvider = "ollama" | "lmstudio" | "openrouter" | "openaiCompatible";
 
 export interface LlmConfig {
@@ -191,10 +198,15 @@ export interface NormalizedGeneratedIdea {
   triggeringSituation: string;
   currentAlternative: string;
   materialConsequence: string;
+  whyNow: string;
+  distributionWedge: string;
+  adoptionFriction: string;
   protocolNeed: string;
+  protocolCounterfactual: string;
   failureReason: string;
   criticalAssumption: string;
   experiment: string;
+  experimentPlan: import("./lib/intelligence-client").IdeaForgeExperimentPlan;
   route: "Xahau" | "Evernode" | "Both" | "Neither yet";
   scores: NormalizedIdeaScores;
 }
@@ -203,6 +215,41 @@ export interface GeneratedIdeasResult {
   ideas: NormalizedGeneratedIdea[];
   provider: LlmProvider;
   model: string;
+}
+
+export interface IntelligenceStatus {
+  available: boolean;
+  engine: "python";
+  version?: string;
+  message: string;
+}
+
+export interface IntelligenceEvent {
+  seq: number;
+  runId: string;
+  type: "progress" | "result" | "error" | "cancelled";
+  phase?:
+    | "starting"
+    | "competitors"
+    | "red_team"
+    | "synthesizing"
+    | "briefing"
+    | "diverging"
+    | "critiquing"
+    | "revising"
+    | "verifying"
+    | "diversifying"
+    | "complete";
+  message: string;
+  percent?: number;
+}
+
+export interface IntelligenceEventBatch {
+  events: IntelligenceEvent[];
+  status: "running" | "completed" | "failed" | "cancelled";
+  /** Untrusted worker output; the renderer client validates the complete nested schema. */
+  result?: unknown;
+  error?: { code?: string; message?: string };
 }
 
 export type BuildToolId = "evernode-mcp" | "xahau-mcp" | "xahc" | "xahc-prover";
@@ -279,6 +326,12 @@ export interface SiftBridge {
     draftEvaluation(input: DraftEvaluationInput): Promise<DraftEvaluationResult>;
     extractEvidence(input: ExtractEvidenceInput): Promise<ExtractEvidenceResult>;
     researchEvidence(input: ResearchEvidenceInput): Promise<ResearchEvidenceResult>;
+  };
+  intelligence: {
+    getStatus(): Promise<IntelligenceStatus>;
+    start(input: IntelligenceRunInput): Promise<{ runId: string }>;
+    getEvents(input: { runId: string; afterSeq: number; waitMs?: number }): Promise<IntelligenceEventBatch>;
+    cancel(input: { runId: string }): Promise<{ cancelled: boolean }>;
   };
   build: {
     getCatalog(): Promise<BuildCatalogEntry[]>;

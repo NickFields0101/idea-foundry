@@ -33,10 +33,24 @@ function completeIdea(overrides = {}) {
     triggeringSituation: "A buyer disputes completion",
     currentAlternative: "Screenshots and private logs",
     materialConsequence: "Slow disputes",
-    protocolNeed: "Shared verifiability",
+    whyNow: "Service networks are adding independent operators faster than manual dispute teams can review their records.",
+    distributionWedge: "Start with one regional network that already coordinates at least twenty independent operators.",
+    adoptionFriction: "Operators may reject another capture step unless it replaces their existing photo and invoice uploads.",
+    protocolNeed: "Xahau settles account-level receipt rules while Evernode runs independent receipt reconciliation across operators.",
+    protocolCounterfactual: "A centralized database is cheaper but leaves one service network able to alter history or withdraw access.",
     failureReason: "Networks may not change workflow",
     criticalAssumption: "Buyers value portable proof",
-    experiment: "Test signed receipts with three operators for 14 days",
+    experiment: "Within 14 days test ten signed receipts; continue at six completed without prompting and stop below three.",
+    experimentPlan: {
+      durationDays: 14,
+      method: "concierge",
+      target: "Ten recently completed independent service jobs",
+      sampleSize: 10,
+      artifact: "A signed receipt and review log for every attempted job",
+      metric: "Receipts completed without prompting and review minutes saved",
+      passThreshold: "At least 6 of 10 receipts are completed without prompting",
+      killThreshold: "Fewer than 3 of 10 receipts are completed without prompting",
+    },
     route: "both",
     scores: {
       personalFit: 130,
@@ -381,6 +395,39 @@ test("drafts evaluation proposals without mutating review inputs or accepting ha
   assert.equal(result.gates[1].suggestedStatus, "unresolved");
   assert.equal(result.provisional, true);
   assert.doesNotMatch(JSON.stringify(result), /evaluation-secret|99Z|G99|evidenceGrade|weighted|reviewerVerified/);
+});
+
+test("idea fallback prompt uses a contract-first protocol counterfactual and structured kill test", async () => {
+  let requestBody;
+  await generateIdeas(
+    { provider: "openaiCompatible", baseUrl: "https://models.example/v1", model: "model-a" },
+    "Generate one idea.",
+    1,
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = JSON.parse(options.body);
+        return jsonResponse({ choices: [{ message: { content: JSON.stringify({ ideas: [completeIdea()] }) } }] });
+      },
+    },
+  );
+  const system = requestBody.messages[0].content;
+  assert.match(system, /contract-first opportunity generator/i);
+  assert.match(system, /protocolCounterfactual/);
+  assert.match(system, /killThreshold/);
+  assert.match(system, /Xahau Hooks are small deterministic WebAssembly/i);
+  assert.match(system, /Evernode is a decentralized marketplace/i);
+  assert.match(system, /Use Neither yet when a conventional system is the honest answer/i);
+});
+
+test("idea normalization fails closed when exploration estimates or the experiment contract are missing", () => {
+  assert.throws(
+    () => normalizeGeneratedIdea(completeIdea({ scores: { personalFit: null } })),
+    /omitted the opportunity-signal/i,
+  );
+  assert.throws(
+    () => normalizeGeneratedIdea(completeIdea({ experimentPlan: undefined })),
+    /structured 14-day experiment plan/i,
+  );
 });
 
 test("thesis-screen mode rates testable hypotheses without fabricating validation outcomes", async () => {

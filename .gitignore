@@ -47,4 +47,9 @@ next-env.d.ts
 *.tsbuildinfo
 /.sites-push.mjs
 /desktop-dist/
+/desktop/intelligence-runtime/
 /release/
+
+# python
+__pycache__/
+*.py[cod]

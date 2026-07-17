@@ -16,6 +16,10 @@ const CHANNELS = Object.freeze({
   draftEvaluation: "sift:llm:draft-evaluation",
   extractEvidence: "sift:llm:extract-evidence",
   researchEvidence: "sift:llm:research-evidence",
+  intelligenceStatus: "sift:intelligence:status",
+  intelligenceStart: "sift:intelligence:start",
+  intelligenceEvents: "sift:intelligence:events",
+  intelligenceCancel: "sift:intelligence:cancel",
   buildCatalog: "sift:build:catalog",
   buildDetect: "sift:build:detect",
   buildRun: "sift:build:run",
@@ -37,6 +41,12 @@ contextBridge.exposeInMainWorld("sift", Object.freeze({
     draftEvaluation: (input) => ipcRenderer.invoke(CHANNELS.draftEvaluation, input),
     extractEvidence: (input) => ipcRenderer.invoke(CHANNELS.extractEvidence, input),
     researchEvidence: (input) => ipcRenderer.invoke(CHANNELS.researchEvidence, input),
+  }),
+  intelligence: Object.freeze({
+    getStatus: () => ipcRenderer.invoke(CHANNELS.intelligenceStatus),
+    start: (input) => ipcRenderer.invoke(CHANNELS.intelligenceStart, input),
+    getEvents: (input) => ipcRenderer.invoke(CHANNELS.intelligenceEvents, input),
+    cancel: (input) => ipcRenderer.invoke(CHANNELS.intelligenceCancel, input),
   }),
   build: Object.freeze({
     getCatalog: () => ipcRenderer.invoke(CHANNELS.buildCatalog),

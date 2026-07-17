@@ -1,0 +1,17 @@
+{
+  "name": "sift-intelligence-worker",
+  "version": "0.2.0",
+  "protocol": "sift-intelligence/1",
+  "entrypoint": ["python", "-m", "desktop.intelligence_worker"],
+  "python": ">=3.11",
+  "dependencies": [],
+  "capabilities": ["ping", "health", "run", "competitor_red_team", "idea_forge", "cancel"],
+  "network": {
+    "default": "denied",
+    "perRequest": "one explicitly user-approved OpenAI-compatible chat endpoint"
+  },
+  "credentials": {
+    "acceptedVia": "JSONL stdin request only",
+    "forbiddenVia": ["argv", "environment", "logs", "stdout events", "filesystem"]
+  }
+}

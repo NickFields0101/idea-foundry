@@ -1,6 +1,6 @@
 {
   "name": "xahau-evernode-sift",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "description": "SIFT: local-first deterministic idea generation and evidence validation for Xahau and Evernode.",
   "author": "Nick Fields",
   "homepage": "https://github.com/NickFields0101/sift#readme",
@@ -22,16 +22,19 @@
     "start": "vinext start",
     "preview": "node scripts/preview-local.mjs",
     "pretest": "vinext build",
-    "test": "node --test tests/scoring.test.ts tests/ai-assistance.test.ts tests/research-run.test.ts tests/quick-run.test.ts tests/model-search.test.ts tests/personality.test.ts tests/storage-migration.test.ts tests/llm-core.test.mjs tests/build-tools.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs",
+    "test": "node --test tests/scoring.test.ts tests/ai-assistance.test.ts tests/research-run.test.ts tests/quick-run.test.ts tests/idea-quality.test.ts tests/model-search.test.ts tests/personality.test.ts tests/storage-migration.test.ts tests/intelligence-client.test.ts tests/intelligence-bridge.test.mjs tests/llm-core.test.mjs tests/build-tools.test.mjs tests/desktop-security.test.mjs tests/rendered-html.test.mjs desktop/intelligence-bridge.test.mjs",
+    "intelligence:test": "python -m unittest discover -s desktop/intelligence_worker/tests -p \"test_*.py\"",
+    "intelligence:build": "python scripts/build-intelligence-worker.py",
+    "intelligence:smoke": "node scripts/smoke-intelligence-worker.mjs",
     "desktop:build": "vite build --config vite.desktop.config.ts",
     "desktop:typecheck": "tsc -p tsconfig.desktop.json",
     "predesktop:run": "npm run desktop:build",
     "desktop:run": "electron .",
-    "predesktop:package": "npm run desktop:build",
+    "predesktop:package": "npm run desktop:build && npm run intelligence:build && npm run intelligence:smoke",
     "desktop:package": "node scripts/package-desktop.mjs",
-    "predesktop:package:win": "npm run desktop:build",
+    "predesktop:package:win": "npm run desktop:build && npm run intelligence:build && npm run intelligence:smoke",
     "desktop:package:win": "node scripts/package-desktop.mjs --platform windows --arch x64",
-    "predesktop:package:mac": "npm run desktop:build",
+    "predesktop:package:mac": "npm run desktop:build && npm run intelligence:build && npm run intelligence:smoke",
     "desktop:package:mac": "node scripts/package-desktop.mjs --platform mac",
     "brand:render": "node scripts/render-sift-assets.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop-dist --ignore-pattern release",
@@ -77,9 +80,19 @@
       "desktop/preload.cjs",
       "desktop/llm-core.mjs",
       "desktop/build-tools.mjs",
+      "desktop/intelligence-bridge.mjs",
       "desktop-dist/**/*",
       "package.json",
       "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/intelligence-runtime/${os}-${arch}",
+        "to": "intelligence",
+        "filter": [
+          "sift-intelligence-worker*"
+        ]
+      }
     ],
     "win": {
       "target": [

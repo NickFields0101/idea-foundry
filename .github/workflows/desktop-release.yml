@@ -21,8 +21,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Use Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Install exact dependencies
         run: npm ci
+      - name: Test Python intelligence protocol
+        run: npm run intelligence:test
       - name: Type-check desktop renderer
         run: npm run desktop:typecheck
       - name: Lint source
@@ -51,8 +57,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Use Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Install exact dependencies
         run: npm ci
+      - name: Install pinned intelligence packager
+        run: python -m pip install pyinstaller==6.21.0
       - name: Build installer and portable executable
         run: npm run desktop:package:win
       - name: Launch packaged app with a clean profile
@@ -120,8 +132,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Use Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Install exact dependencies
         run: npm ci
+      - name: Install pinned intelligence packager
+        run: python -m pip install pyinstaller==6.21.0
       - name: Confirm native build architecture
         shell: bash
         run: |

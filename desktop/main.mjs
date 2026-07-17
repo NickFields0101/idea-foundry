@@ -21,6 +21,10 @@ import {
   publicBuildError,
   runBuildTool,
 } from "./build-tools.mjs";
+import {
+  IntelligenceSupervisor,
+  publicIntelligenceError,
+} from "./intelligence-bridge.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Keep Electron's internal identity and user-data directory stable so a SIFT
@@ -42,6 +46,10 @@ const CHANNELS = Object.freeze({
   draftEvaluation: "sift:llm:draft-evaluation",
   extractEvidence: "sift:llm:extract-evidence",
   researchEvidence: "sift:llm:research-evidence",
+  intelligenceStatus: "sift:intelligence:status",
+  intelligenceStart: "sift:intelligence:start",
+  intelligenceEvents: "sift:intelligence:events",
+  intelligenceCancel: "sift:intelligence:cancel",
   buildCatalog: "sift:build:catalog",
   buildDetect: "sift:build:detect",
   buildRun: "sift:build:run",
@@ -56,6 +64,11 @@ const EXTERNAL_REPOSITORIES = new Set([
 
 let mainWindow = null;
 let configMutationQueue = Promise.resolve();
+const intelligence = new IntelligenceSupervisor({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  moduleDirectory: __dirname,
+});
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 
@@ -186,6 +199,10 @@ function safeHandler(handler, errorMapper = publicError) {
   };
 }
 
+function intelligenceError(error) {
+  return error instanceof ConnectorError ? publicError(error) : publicIntelligenceError(error);
+}
+
 function trustedExternalUrl(value) {
   if (typeof value !== "string" || value.length > 300) throw new Error("That external link is not allowed.");
   let url;
@@ -254,6 +271,24 @@ function registerIpc() {
       maxSources: input?.maxSources,
     });
   }));
+  ipcMain.handle(CHANNELS.intelligenceStatus, safeHandler(
+    async () => intelligence.getStatus(),
+    intelligenceError,
+  ));
+  ipcMain.handle(CHANNELS.intelligenceStart, safeHandler(async (input = {}) => {
+    // Only the main process can open the OS-protected credential. The renderer
+    // cannot supply, retrieve, or observe an API key for intelligence runs.
+    const config = await resolvedConfig();
+    return intelligence.start(input, config);
+  }, intelligenceError));
+  ipcMain.handle(CHANNELS.intelligenceEvents, safeHandler(
+    async (input = {}) => intelligence.getEvents(input),
+    intelligenceError,
+  ));
+  ipcMain.handle(CHANNELS.intelligenceCancel, safeHandler(
+    async (input = {}) => intelligence.cancel(input),
+    intelligenceError,
+  ));
   ipcMain.handle(CHANNELS.buildCatalog, safeHandler(async () => getBuildCatalog(), publicBuildError));
   ipcMain.handle(CHANNELS.buildDetect, safeHandler(async () => detectBuildTools(), publicBuildError));
   ipcMain.handle(CHANNELS.buildRun, safeHandler((input) => runBuildTool(input), publicBuildError));
@@ -319,4 +354,6 @@ if (singleInstance) {
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
+
+  app.on("before-quit", () => intelligence.stop());
 }
