@@ -66,7 +66,7 @@ Python is required only for development and release builds. Published desktop pa
 - [Intelligence engine](docs/intelligence-engine.md)
 - [macOS distribution](docs/macos-distribution.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
-- [Latest release notes](docs/release-notes-v0.11.1.md)
+- [Release history](https://github.com/NickFields0101/sift/releases)
 
 ## License
 

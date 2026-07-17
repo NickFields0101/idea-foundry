@@ -6,8 +6,17 @@ import time
 import unittest
 
 from desktop.intelligence_worker.idea_forge import _parse_json, validate_final_ideas
+from desktop.intelligence_worker.model_client import _uses_bounded_reasoning
 from desktop.intelligence_worker.protocol import PROTOCOL, ProtocolError, validate_envelope, validate_run_request
 from desktop.intelligence_worker.worker import Worker
+
+
+class ModelControlTests(unittest.TestCase):
+    def test_bounded_reasoning_only_targets_claude_46(self) -> None:
+        self.assertTrue(_uses_bounded_reasoning("anthropic/claude-opus-4.6"))
+        self.assertTrue(_uses_bounded_reasoning("anthropic/claude-sonnet-4.6:exacto"))
+        self.assertFalse(_uses_bounded_reasoning("openai/gpt-4.1-mini"))
+        self.assertFalse(_uses_bounded_reasoning("anthropic/claude-opus-4"))
 
 
 def forge_message(run_id: str = "forge-1", requested_count: int = 2) -> dict:
@@ -39,7 +48,7 @@ def forge_message(run_id: str = "forge-1", requested_count: int = 2) -> dict:
     }
 
 
-def frames(count: int = 8) -> dict:
+def frames(count: int = 6) -> dict:
     return {
         "frames": [
             {
@@ -61,7 +70,7 @@ def raw_candidates(count: int = 6) -> dict:
         "candidates": [
             {
                 "title": f"Raw Candidate {index}",
-                "frameLabel": f"Frame {index % 8}",
+                "frameLabel": f"Frame {index % 6}",
                 "concept": f"Explore a bounded coordination mechanism {index}.",
                 "user": f"Organizer group {index}",
                 "buyer": f"Independent program operator {index}",
@@ -122,7 +131,7 @@ class IdeaForgeProtocolTests(unittest.TestCase):
         request = validate_run_request(validate_envelope(forge_message()))
         self.assertEqual(request.task, "idea_forge")
         self.assertEqual(request.budget.max_model_calls, 3)
-        self.assertEqual(request.budget.timeout_ms, 180_000)
+        self.assertEqual(request.budget.timeout_ms, 300_000)
         self.assertEqual(request.model.max_tokens, 12_000)
         invalid = forge_message()
         invalid["params"]["input"]["profile"]["opennessScore"] = 91
@@ -219,9 +228,11 @@ class IdeaForgeWorkerTests(unittest.TestCase):
         output = io.StringIO()
         responses = iter((frames(), raw_candidates(), final_ideas()))
         prompts: list[list[dict[str, str]]] = []
+        stage_timeouts: list[float] = []
 
         def fake_client(config, messages, **kwargs):
             prompts.append(messages)
+            stage_timeouts.append(kwargs["timeout_seconds"])
             return json.dumps(next(responses))
 
         worker = Worker(output, model_client=fake_client)
@@ -231,6 +242,10 @@ class IdeaForgeWorkerTests(unittest.TestCase):
             time.sleep(0.01)
         messages = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(len(prompts), 3)
+        self.assertLess(stage_timeouts[0], stage_timeouts[1])
+        self.assertLess(stage_timeouts[1], stage_timeouts[2])
+        self.assertLess(stage_timeouts[2], 300)
+        self.assertGreater(stage_timeouts[2], 280)
         self.assertIn("account Hooks", prompts[0][0]["content"])
         self.assertIn("Demand, traction", prompts[2][0]["content"])
         progress = [message["stage"] for message in messages if message["type"] == "progress"]
@@ -248,7 +263,7 @@ class IdeaForgeWorkerTests(unittest.TestCase):
         self.assertEqual(
             result["diagnostics"],
             {
-                "framesGenerated": 8,
+                "framesGenerated": 6,
                 "rawCandidatesGenerated": 6,
                 "candidatesReturned": 2,
                 "method": "frame-diverge-critique",

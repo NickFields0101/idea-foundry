@@ -185,6 +185,20 @@ interface ProjectDetails {
   selectedIdeaId: string;
 }
 
+interface OneShotCheckpoint {
+  fingerprint: string;
+  generatedCandidates: IdeaCandidate[];
+  chosenIdea: IdeaCandidate;
+  projectSnapshot: ProjectDetails;
+  selectionPriority: number;
+  researchComplete: boolean;
+  contextResult?: ResearchEvidenceResult;
+  contextNote: string;
+  intelligenceComplete: boolean;
+  intelligenceResult?: IntelligenceResult;
+  intelligenceNote: string;
+}
+
 interface QuickRunOutcomeState {
   kind: "one-shot" | "reviewed-research" | "preview";
   preview: QuickRunPreview;
@@ -1333,6 +1347,7 @@ export default function Home() {
   const aiAssistRequestRef = useRef(0);
   const generationRequestRef = useRef(0);
   const quickRunRequestRef = useRef(0);
+  const oneShotCheckpointRef = useRef<OneShotCheckpoint | null>(null);
   const modelSearchTimerRef = useRef<number | null>(null);
   const modelSearchRequestRef = useRef(0);
   const modelConfigRequestRef = useRef(0);
@@ -1623,6 +1638,7 @@ export default function Home() {
     aiAssistRequestRef.current += 1;
     generationRequestRef.current += 1;
     quickRunRequestRef.current += 1;
+    oneShotCheckpointRef.current = null;
     setAiAssistBusy(null);
     setEvaluationNotes("");
     setEvaluationDraft(null);
@@ -2091,15 +2107,19 @@ export default function Home() {
       }
     }
 
-    const runDesktopFallback = async (progressMessage: string) => {
+    const runDesktopFallback = async (
+      progressMessage: string,
+      { compact = false }: { compact?: boolean } = {},
+    ) => {
       if (options.isCancelled?.()) throw new Error("Idea generation was cancelled.");
       options.onProgress?.(progressMessage);
+      const fallbackCount = compact ? Math.min(2, requestedCount) : requestedCount;
       const generationPrompt = (options.promptOverride ?? generationPromptFor(snapshot.profile, snapshot.project.domain))
-        .replace("Generate 8 diverse candidates", `Generate ${requestedCount} diverse candidates`);
+        .replace("Generate 8 diverse candidates", `Generate ${fallbackCount} diverse candidates`);
       try {
         return await connection.bridge.llm.generateIdeas({
           prompt: generationPrompt,
-          count: requestedCount,
+          count: fallbackCount,
           profileMode: snapshot.profile.mode,
           provider: connection.saved.provider,
           baseUrl: connection.saved.baseUrl,
@@ -2117,7 +2137,7 @@ export default function Home() {
         requestedCount,
         profile: ideaForgeProfileFor(snapshot.profile),
       },
-      limits: { timeoutMs: 180_000 },
+      limits: { timeoutMs: 300_000 },
     }, {
       isCancelled: options.isCancelled,
       onProgress: (progress) => {
@@ -2133,14 +2153,14 @@ export default function Home() {
       sourceDetails = { engine: "python_multistage", pipelineVersion: forge.result.pipelineVersion };
     } else if (forge.kind === "unavailable") {
       result = await runDesktopFallback("Idea Forge is unavailable. SIFT is trying its standard idea generator now.");
-      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.1.0" };
+      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.2.0" };
     } else {
       const recovery = classifyAiRunFailure(forge, connection.saved.provider);
       if (!recovery.allowIdeaForgeFallback) throw new Error(recovery.userMessage);
       result = await runDesktopFallback(recovery.category === "timeout"
-        ? "Idea Forge timed out. SIFT is trying its standard idea generator now."
-        : `${recovery.userMessage} SIFT is trying its standard idea generator now.`);
-      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.1.0" };
+        ? "Idea Forge's deep pass reached its time budget. SIFT is finishing a smaller slate with one lighter request using the same model."
+        : `${recovery.userMessage} SIFT is finishing a smaller slate with one lighter request using the same model.`, { compact: true });
+      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.2.0" };
     }
 
     if (options.isCancelled?.()) throw new Error("Idea generation was cancelled.");
@@ -2175,14 +2195,20 @@ export default function Home() {
         : assessGeneratedResult();
     } catch (error) {
       if (sourceDetails.engine === "desktop_single_pass") throw error;
-      result = await runDesktopFallback("Idea Forge's ideas could not pass SIFT's local quality check. SIFT is trying its standard idea generator now.");
-      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.1.0" };
+      result = await runDesktopFallback(
+        "Idea Forge's ideas could not pass SIFT's local quality check. SIFT is finishing a smaller slate with one lighter request using the same model.",
+        { compact: true },
+      );
+      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.2.0" };
       assessed = assessStandardResult();
     }
     let { qualitySlate, selected } = assessed;
     if (selected.length === 0 && sourceDetails.engine === "python_multistage") {
-      result = await runDesktopFallback("Idea Forge's ideas did not pass SIFT's local quality check. SIFT is trying its standard idea generator now.");
-      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.1.0" };
+      result = await runDesktopFallback(
+        "Idea Forge's ideas did not pass SIFT's local quality check. SIFT is finishing a smaller slate with one lighter request using the same model.",
+        { compact: true },
+      );
+      sourceDetails = { engine: "desktop_single_pass", pipelineVersion: "idea-fallback/1.2.0" };
       if (options.isCancelled?.()) throw new Error("Idea generation was cancelled.");
       ({ qualitySlate, selected } = assessStandardResult());
     }
@@ -2382,6 +2408,7 @@ export default function Home() {
       stateAtStart.ideas,
       evaluationNotesAtStart,
     );
+    let activeStep = "idea generation";
     setQuickRunPhase("generating");
     setQuickRunMessage("Generating four fresh business ideas and choosing the strongest profile match.");
     setSection("quick");
@@ -2397,38 +2424,76 @@ export default function Home() {
         return;
       }
 
-      const slate = await generateQualitySlate(connection, stateAtStart, 4, {
-        promptOverride: generationPromptBase,
-        isCancelled: () => runId !== quickRunRequestRef.current,
-        onProgress: (message, percent) => {
-          if (runId !== quickRunRequestRef.current) return;
-          setQuickRunMessage(`${message}${typeof percent === "number" ? ` (${Math.round(percent)}%)` : ""}`);
-        },
-      });
-      if (runId !== quickRunRequestRef.current) return;
-      setQuickRunMessage("Ideas generated. Comparing the strongest candidates.");
-      const generatedCandidates = slate.candidates;
-      setLastGeneration({
-        provider: slate.result.provider,
-        model: slate.result.model,
-        count: generatedCandidates.length,
-      });
-
-      const chosenIdea = [...generatedCandidates].sort(
-        (left, right) => compareIdeaCandidates(stateAtStart.profile, left, right),
-      )[0];
-      if (!chosenIdea) throw new Error("SIFT could not find a generated idea to screen.");
       const selectedBy = "automated-priority" as const;
       const ideaScreenReview = freshIdeaScreenReview();
-      const projectSnapshot = {
-        ...stateAtStart.project,
-        title: chosenIdea.title,
-        selectedIdeaId: chosenIdea.id,
-      };
-      const selectionPriority = calculateGenerationPriority(
-        stateAtStart.profile,
-        chosenIdea.scores,
-      );
+      const checkpointFingerprint = secureFingerprint(JSON.stringify([
+        liveFingerprintAtStart,
+        generationPromptBase,
+        connection.saved.provider,
+        connection.saved.baseUrl,
+        connection.saved.model,
+      ]));
+      let checkpoint = oneShotCheckpointRef.current;
+      if (checkpoint?.fingerprint !== checkpointFingerprint) {
+        checkpoint = null;
+        oneShotCheckpointRef.current = null;
+      }
+
+      let generatedCandidates: IdeaCandidate[];
+      let chosenIdea: IdeaCandidate;
+      let projectSnapshot: ProjectDetails;
+      let selectionPriority: number;
+      if (checkpoint) {
+        generatedCandidates = checkpoint.generatedCandidates;
+        chosenIdea = checkpoint.chosenIdea;
+        projectSnapshot = checkpoint.projectSnapshot;
+        selectionPriority = checkpoint.selectionPriority;
+        setQuickRunMessage("Resuming this run. The generated ideas are already saved for this session.");
+      } else {
+        const slate = await generateQualitySlate(connection, stateAtStart, 4, {
+          promptOverride: generationPromptBase,
+          isCancelled: () => runId !== quickRunRequestRef.current,
+          onProgress: (message, percent) => {
+            if (runId !== quickRunRequestRef.current) return;
+            setQuickRunMessage(`${message}${typeof percent === "number" ? ` (${Math.round(percent)}%)` : ""}`);
+          },
+        });
+        if (runId !== quickRunRequestRef.current) return;
+        setQuickRunMessage("Ideas generated. Comparing the strongest candidates.");
+        generatedCandidates = slate.candidates;
+        setLastGeneration({
+          provider: slate.result.provider,
+          model: slate.result.model,
+          count: generatedCandidates.length,
+        });
+
+        const prioritized = [...generatedCandidates].sort(
+          (left, right) => compareIdeaCandidates(stateAtStart.profile, left, right),
+        )[0];
+        if (!prioritized) throw new Error("SIFT could not find a generated idea to screen.");
+        chosenIdea = prioritized;
+        projectSnapshot = {
+          ...stateAtStart.project,
+          title: chosenIdea.title,
+          selectedIdeaId: chosenIdea.id,
+        };
+        selectionPriority = calculateGenerationPriority(
+          stateAtStart.profile,
+          chosenIdea.scores,
+        );
+        checkpoint = {
+          fingerprint: checkpointFingerprint,
+          generatedCandidates,
+          chosenIdea,
+          projectSnapshot,
+          selectionPriority,
+          researchComplete: false,
+          contextNote: "",
+          intelligenceComplete: false,
+          intelligenceNote: "",
+        };
+        oneShotCheckpointRef.current = checkpoint;
+      }
 
       const draftEvaluationFor = async (
         baseReview: ReviewInput,
@@ -2494,78 +2559,101 @@ export default function Home() {
         return preview;
       };
 
-      let contextResult: ResearchEvidenceResult | undefined;
-      let contextNote = "";
-      if (connection.saved.provider === "openrouter") {
-        setQuickRunPhase("researching-evidence");
-        setQuickRunMessage("Researching cited public context. This can inform the idea check, but it is not customer validation.");
-        try {
-          contextResult = await connection.bridge.llm.researchEvidence({
-            provider: connection.saved.provider,
-            baseUrl: connection.saved.baseUrl,
-            model: connection.saved.model,
-            projectContext: publicResearchContextFor(chosenIdea, projectSnapshot),
-            claimIds: publicResearchClaimIds(ideaScreenReview),
-            maxSources: 8,
-          });
-        } catch {
-          contextNote = "Public research could not complete. The idea check continued.";
+      let contextResult = checkpoint.contextResult;
+      let contextNote = checkpoint.contextNote;
+      if (!checkpoint.researchComplete) {
+        activeStep = "public research";
+        if (connection.saved.provider === "openrouter") {
+          setQuickRunPhase("researching-evidence");
+          setQuickRunMessage("Researching cited public context. This can inform the idea check, but it is not customer validation.");
+          try {
+            contextResult = await connection.bridge.llm.researchEvidence({
+              provider: connection.saved.provider,
+              baseUrl: connection.saved.baseUrl,
+              model: connection.saved.model,
+              projectContext: publicResearchContextFor(chosenIdea, projectSnapshot),
+              claimIds: publicResearchClaimIds(ideaScreenReview),
+              maxSources: 8,
+            });
+          } catch {
+            contextNote = "Public research could not complete. The idea check continued.";
+          }
+        } else {
+          contextNote = "Public context research was skipped because this run used a local or OpenAI-compatible model. Validation still begins normally with zero direct evidence.";
         }
-      } else {
-        contextNote = "Public context research was skipped because this run used a local or OpenAI-compatible model. Validation still begins normally with zero direct evidence.";
+        if (runId !== quickRunRequestRef.current) return;
+        checkpoint = {
+          ...checkpoint,
+          researchComplete: true,
+          ...(contextResult ? { contextResult } : {}),
+          contextNote,
+        };
+        oneShotCheckpointRef.current = checkpoint;
       }
-      if (runId !== quickRunRequestRef.current) return;
 
-      setQuickRunPhase("intelligence-analysis");
-      setQuickRunMessage("Python is mapping alternatives and testing the idea's weakest assumptions. This analysis is context, not evidence.");
-      const intelligenceOutcome = await runCompetitorRedTeamIntelligence({
-        task: "competitor_red_team",
-        context: {
-          idea: {
-            title: chosenIdea.title,
-            concept: [
-              chosenIdea.concept,
-              `Trigger: ${chosenIdea.triggeringSituation}`,
-              `Consequence: ${chosenIdea.materialConsequence}`,
-              `Why now: ${chosenIdea.whyNow}`,
-              `Distribution wedge: ${chosenIdea.distributionWedge}`,
-              `Adoption friction: ${chosenIdea.adoptionFriction}`,
-              `Protocol job: ${chosenIdea.protocolNeed}`,
-              `Conventional counterfactual: ${chosenIdea.protocolCounterfactual}`,
-              `Largest failure reason: ${chosenIdea.failureReason}`,
-            ].join("\n"),
-            user: chosenIdea.user,
-            buyer: chosenIdea.buyer,
-            currentAlternative: chosenIdea.currentAlternative,
-            criticalAssumption: chosenIdea.criticalAssumption,
-            experiment: chosenIdea.experiment,
-            route: chosenIdea.route,
+      let intelligenceResult = checkpoint.intelligenceResult;
+      let intelligenceNote = checkpoint.intelligenceNote;
+      if (!checkpoint.intelligenceComplete) {
+        activeStep = "risk analysis";
+        setQuickRunPhase("intelligence-analysis");
+        setQuickRunMessage("Python is mapping alternatives and testing the idea's weakest assumptions. This analysis is context, not evidence.");
+        const intelligenceOutcome = await runCompetitorRedTeamIntelligence({
+          task: "competitor_red_team",
+          context: {
+            idea: {
+              title: chosenIdea.title,
+              concept: [
+                chosenIdea.concept,
+                `Trigger: ${chosenIdea.triggeringSituation}`,
+                `Consequence: ${chosenIdea.materialConsequence}`,
+                `Why now: ${chosenIdea.whyNow}`,
+                `Distribution wedge: ${chosenIdea.distributionWedge}`,
+                `Adoption friction: ${chosenIdea.adoptionFriction}`,
+                `Protocol job: ${chosenIdea.protocolNeed}`,
+                `Conventional counterfactual: ${chosenIdea.protocolCounterfactual}`,
+                `Largest failure reason: ${chosenIdea.failureReason}`,
+              ].join("\n"),
+              user: chosenIdea.user,
+              buyer: chosenIdea.buyer,
+              currentAlternative: chosenIdea.currentAlternative,
+              criticalAssumption: chosenIdea.criticalAssumption,
+              experiment: chosenIdea.experiment,
+              route: chosenIdea.route,
+            },
+            projectBoundary: projectSnapshot.domain || "Open opportunity boundary",
+            publicSources: (contextResult?.citations ?? []).slice(0, 8).map((citation) => ({
+              sourceId: citation.sourceId,
+              url: citation.url,
+              title: citation.title,
+              content: citation.content,
+              contentSha256: citation.contentSha256,
+            })),
           },
-          projectBoundary: projectSnapshot.domain || "Open opportunity boundary",
-          publicSources: (contextResult?.citations ?? []).slice(0, 8).map((citation) => ({
-            sourceId: citation.sourceId,
-            url: citation.url,
-            title: citation.title,
-            content: citation.content,
-            contentSha256: citation.contentSha256,
-          })),
-        },
-        limits: { timeoutMs: 90_000, maxSources: 8 },
-      }, {
-        isCancelled: () => runId !== quickRunRequestRef.current,
-        onProgress: (progress) => {
-          if (runId !== quickRunRequestRef.current) return;
-          const progressLabel = typeof progress.percent === "number" ? ` (${Math.round(progress.percent)}%)` : "";
-          setQuickRunMessage(`${progress.message}${progressLabel}`);
-        },
-      });
-      if (runId !== quickRunRequestRef.current) return;
-      const intelligenceResult = intelligenceOutcome.kind === "completed"
-        ? intelligenceOutcome.result
-        : undefined;
-      const intelligenceNote = intelligenceOutcome.kind === "completed"
-        ? ""
-        : intelligenceOutcome.message;
+          limits: { timeoutMs: 90_000, maxSources: 8 },
+        }, {
+          isCancelled: () => runId !== quickRunRequestRef.current,
+          onProgress: (progress) => {
+            if (runId !== quickRunRequestRef.current) return;
+            const progressLabel = typeof progress.percent === "number" ? ` (${Math.round(progress.percent)}%)` : "";
+            setQuickRunMessage(`${progress.message}${progressLabel}`);
+          },
+        });
+        if (runId !== quickRunRequestRef.current) return;
+        intelligenceResult = intelligenceOutcome.kind === "completed"
+          ? intelligenceOutcome.result
+          : undefined;
+        intelligenceNote = intelligenceOutcome.kind === "completed"
+          ? ""
+          : intelligenceOutcome.message;
+        checkpoint = {
+          ...checkpoint,
+          intelligenceComplete: true,
+          ...(intelligenceResult ? { intelligenceResult } : {}),
+          intelligenceNote,
+        };
+        oneShotCheckpointRef.current = checkpoint;
+      }
+      activeStep = "idea screening";
       const finalPreview = await draftEvaluationFor(
         ideaScreenReview,
         contextResult || intelligenceResult
@@ -2609,6 +2697,7 @@ export default function Home() {
         throw new Error("The idea check finished, but the project could not be saved locally. Free browser storage and retry; no live project changes were applied.");
       }
       stateRef.current = nextState;
+      oneShotCheckpointRef.current = null;
       setState(nextState);
       setAiUndo({
         label: "new-idea thesis screen",
@@ -2649,7 +2738,12 @@ export default function Home() {
             : "Idea check saved with an incomplete-screen build caution");
     } catch (error) {
       if (runId !== quickRunRequestRef.current) return;
-      const message = friendlyAiError(error, llmConfig.provider);
+      const recovery = classifyAiRunFailure(error, llmConfig.provider);
+      const message = recovery.category === "timeout"
+        ? `The ${activeStep} step did not finish in time.${oneShotCheckpointRef.current
+          ? " Try again and SIFT will resume from the completed ideas instead of generating them again."
+          : " Try again or choose a faster model."}`
+        : recovery.userMessage;
       setQuickRunPhase("idle");
       setQuickRunMode("one-shot");
       setQuickRunOutcome(null);
@@ -3104,6 +3198,7 @@ export default function Home() {
 
   function exitQuickRun() {
     quickRunRequestRef.current += 1;
+    oneShotCheckpointRef.current = null;
     setQuickRunPhase("idle");
     setQuickRunMessage("");
     setQuickRunMode(null);

@@ -289,7 +289,7 @@ function normalizeIdeaForgeInput(value: IdeaForgeRunInput): IdeaForgeRunInput | 
     || (profile.mode !== "neutral" && profile.mode !== "private")
     || !Number.isSafeInteger(timeoutMs)
     || Number(timeoutMs) < 10_000
-    || Number(timeoutMs) > 180_000) return null;
+    || Number(timeoutMs) > 300_000) return null;
 
   const normalizeDimensions = (candidate: unknown, maximum: number): IdeaForgeWeightedDimension[] | null => {
     if (!Array.isArray(candidate) || candidate.length > maximum) return null;
@@ -507,7 +507,7 @@ function normalizeIdeaForgeResult(
   if (usageCounts.some((count) => !Number.isSafeInteger(count) || Number(count) < 0)
     || Number(usage.modelCalls) > 3
     || Number(usage.steps) > 16
-    || Number(usage.elapsedMs) > 180_000) return null;
+    || Number(usage.elapsedMs) > 300_000) return null;
 
   return {
     task: "idea_forge",
@@ -715,10 +715,11 @@ async function runIntelligenceTask<Result>(
     if (!runId) return { kind: "failed", message: messages.missingRunId };
 
     let afterSeq = 0;
+    const maximumTimeoutMs = input.task === "idea_forge" ? 300_000 : 180_000;
     const timeoutMs = Number.isFinite(input.limits.timeoutMs) && input.limits.timeoutMs > 0
-      ? Math.min(input.limits.timeoutMs, 180_000)
+      ? Math.min(input.limits.timeoutMs, maximumTimeoutMs)
       : DEFAULT_TIMEOUT_MS;
-    const deadline = Date.now() + timeoutMs + 15_000;
+    const deadline = Date.now() + timeoutMs + (input.task === "idea_forge" ? 20_000 : 15_000);
 
     while (Date.now() < deadline) {
       if (options.isCancelled?.()) {

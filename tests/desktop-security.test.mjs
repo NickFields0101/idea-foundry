@@ -56,9 +56,11 @@ test("Idea Forge failures recover through one bounded standard-generation path",
   assert.match(generation, /classifyAiRunFailure\(forge, connection\.saved\.provider\)/);
   assert.match(generation, /if \(!recovery\.allowIdeaForgeFallback\) throw new Error\(recovery\.userMessage\)/);
   assert.match(generation, /SIFT is trying its standard idea generator now/);
+  assert.match(generation, /fallbackCount = compact \? Math\.min\(2, requestedCount\) : requestedCount/);
+  assert.match(generation, /\{ compact: true \}/);
   assert.doesNotMatch(generation, /Continuing automatically/);
   assert.match(generation, /if \(options\.isCancelled\?\.\(\)\) return;[^]*options\.onProgress\?\.\(progress\.message, progress\.percent\)/);
-  assert.match(generation, /sourceDetails = \{ engine: "desktop_single_pass", pipelineVersion: "idea-fallback\/1\.1\.0" \}/);
+  assert.match(generation, /sourceDetails = \{ engine: "desktop_single_pass", pipelineVersion: "idea-fallback\/1\.2\.0" \}/);
   assert.equal((generation.match(/connection\.bridge\.llm\.generateIdeas\(/g) ?? []).length, 1, "all recovery branches share one bounded fallback helper");
 });
 

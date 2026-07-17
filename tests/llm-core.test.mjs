@@ -322,10 +322,10 @@ test("accepts fenced OpenAI-compatible JSON while keeping it provisional", async
   assert.equal(result.ideas[0].title, "Portable service proof");
 });
 
-test("generates ideas through OpenRouter without exposing its key in output", async () => {
+test("generates ideas through OpenRouter with bounded Opus 4.6 reasoning and no key exposure", async () => {
   let request = {};
   const result = await generateIdeas(
-    { provider: "openrouter", apiKey: "openrouter-test-key", model: "openai/gpt-4.1-mini" },
+    { provider: "openrouter", apiKey: "openrouter-test-key", model: "anthropic/claude-opus-4.6" },
     "Generate one idea.",
     1,
     {
@@ -337,12 +337,67 @@ test("generates ideas through OpenRouter without exposing its key in output", as
   );
   assert.equal(request.url, "https://openrouter.ai/api/v1/chat/completions");
   assert.equal(request.headers.Authorization, "Bearer openrouter-test-key");
-  assert.equal(request.body.model, "openai/gpt-4.1-mini");
+  assert.equal(request.body.model, "anthropic/claude-opus-4.6");
   assert.equal(request.body.stream, false);
+  assert.equal(request.body.max_tokens, 8_000);
+  assert.deepEqual(request.body.reasoning, { effort: "low", exclude: true });
   assert.deepEqual(request.body.provider, { data_collection: "deny", zdr: true });
   assert.equal(result.provider, "openrouter");
   assert.equal(result.ideas[0].title, "Portable service proof");
   assert.doesNotMatch(JSON.stringify(result), /openrouter-test-key/);
+});
+
+test("does not send Claude-specific controls to other OpenRouter models", async () => {
+  let requestBody;
+  const result = await generateIdeas(
+    { provider: "openrouter", apiKey: "openrouter-test-key", model: "openai/gpt-4.1-mini" },
+    "Generate one idea.",
+    1,
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = JSON.parse(options.body);
+        return jsonResponse({ choices: [{ message: { content: JSON.stringify({ ideas: [completeIdea()] }) } }] });
+      },
+    },
+  );
+  assert.equal(requestBody.max_tokens, undefined);
+  assert.equal(requestBody.reasoning, undefined);
+  assert.deepEqual(requestBody.provider, { data_collection: "deny", zdr: true });
+  assert.equal(result.ideas.length, 1);
+});
+
+test("idea generation aborts one slow model request at its configured deadline", async () => {
+  let requests = 0;
+  let observedAbort = false;
+  const fetchImpl = async (_url, options) => {
+    requests += 1;
+    return await new Promise((_resolve, reject) => {
+      const onAbort = () => {
+        observedAbort = true;
+        const error = new Error("aborted by deadline");
+        error.name = "AbortError";
+        reject(error);
+      };
+      if (options.signal.aborted) onAbort();
+      else options.signal.addEventListener("abort", onAbort, { once: true });
+    });
+  };
+
+  await assert.rejects(
+    generateIdeas(
+      { provider: "openrouter", apiKey: "timeout-test-key", model: "anthropic/claude-opus-4.6" },
+      "Generate one idea.",
+      1,
+      { fetchImpl, timeoutMs: 5 },
+    ),
+    (error) => {
+      assert.equal(error.code, "timeout");
+      assert.match(error.message, /timed out/i);
+      return true;
+    },
+  );
+  assert.equal(requests, 1);
+  assert.equal(observedAbort, true);
 });
 
 test("drafts evaluation proposals without mutating review inputs or accepting hallucinated IDs", async () => {
@@ -383,6 +438,8 @@ test("drafts evaluation proposals without mutating review inputs or accepting ha
 
   assert.deepEqual(input, before);
   assert.equal(requestBody.temperature, 0.1);
+  assert.equal(requestBody.max_tokens, undefined);
+  assert.equal(requestBody.reasoning, undefined);
   assert.equal(requestBody.messages[0].role, "system");
   assert.equal(requestBody.messages[1].role, "user");
   assert.doesNotMatch(requestBody.messages[0].content, /portable service receipts/);
@@ -489,7 +546,7 @@ test("thesis-screen mode rates testable hypotheses without fabricating validatio
   const before = structuredClone(input);
   let requestBody;
   const result = await draftEvaluation(
-    { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "provider/thesis-reviewer", apiKey: "thesis-secret" },
+    { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-opus-4.6", apiKey: "thesis-secret" },
     input,
     {
       fetchImpl: async (_url, options) => {
@@ -521,6 +578,8 @@ test("thesis-screen mode rates testable hypotheses without fabricating validatio
 
   assert.deepEqual(input, before);
   assert.deepEqual(requestBody.provider, { data_collection: "deny", zdr: true });
+  assert.equal(requestBody.max_tokens, 12_000);
+  assert.deepEqual(requestBody.reasoning, { effort: "low", exclude: true });
   const systemPrompt = requestBody.messages[0].content;
   assert.match(systemPrompt, /THESIS SCREEN/i);
   assert.match(systemPrompt, /specificity, internal coherence, falsifiability/i);
@@ -851,7 +910,7 @@ test("researches through OpenRouter web search, then maps exact provider excerpt
   ];
 
   const result = await researchEvidence(
-    { provider: "openrouter", apiKey, model: "provider/research-model" },
+    { provider: "openrouter", apiKey, model: "anthropic/claude-opus-4.6" },
     { projectContext, claimIds: ["1C", "2C"], maxSources: 50 },
     {
       now: () => new Date("2026-07-10T12:34:56.000Z"),
@@ -869,12 +928,16 @@ test("researches through OpenRouter web search, then maps exact provider excerpt
   ]);
   assert.equal(requests[0].headers.Authorization, `Bearer ${apiKey}`);
   assert.equal(requests[0].body.tool_choice, "required");
+  assert.equal(requests[0].body.max_tokens, 6_000);
+  assert.deepEqual(requests[0].body.reasoning, { effort: "low", exclude: true });
   assert.deepEqual(requests[0].body.provider, { data_collection: "deny", zdr: true });
   assert.deepEqual(requests[0].body.tools, [{
     type: "openrouter:web_search",
     parameters: { engine: "exa", max_results: 10, max_total_results: 10, max_characters: 4000 },
   }]);
   assert.deepEqual(requests[1].body.provider, { data_collection: "deny", zdr: true });
+  assert.equal(requests[1].body.max_tokens, 8_000);
+  assert.deepEqual(requests[1].body.reasoning, { effort: "low", exclude: true });
   assert.equal("tools" in requests[1].body, false);
   assert.match(requests[0].body.messages[1].content, new RegExp(projectContext));
   assert.doesNotMatch(requests[0].body.messages[0].content, new RegExp(projectContext));

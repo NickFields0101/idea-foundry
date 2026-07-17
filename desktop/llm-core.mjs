@@ -588,6 +588,8 @@ Each candidate must name a specific actor and trigger, the current workflow, a m
 }
 
 const OPENROUTER_PRIVATE_ROUTING = Object.freeze({ data_collection: "deny", zdr: true });
+const OPENROUTER_WORKFLOW_REASONING = Object.freeze({ effort: "low", exclude: true });
+const DEFAULT_AUTOMATED_TIMEOUT_MS = 240_000;
 
 function privacyRoutingFor(config) {
   return config.provider === "openrouter"
@@ -595,9 +597,18 @@ function privacyRoutingFor(config) {
     : {};
 }
 
+function automationControlsFor(config, maxTokens) {
+  const model = String(config.model ?? "").trim();
+  const boundedClaude46 = config.provider === "openrouter"
+    && /^anthropic\/claude-(?:(?:opus|sonnet)-4\.6|4\.6-(?:opus|sonnet))(?:$|[-:])/i.test(model);
+  return boundedClaude46
+    ? { max_tokens: maxTokens, reasoning: OPENROUTER_WORKFLOW_REASONING }
+    : {};
+}
+
 export async function generateIdeas(configInput, prompt, count = 8, {
   fetchImpl = fetch,
-  timeoutMs = 180_000,
+  timeoutMs = DEFAULT_AUTOMATED_TIMEOUT_MS,
   profileMode = "unspecified",
 } = {}) {
   const config = normalizeConfig(configInput);
@@ -615,7 +626,14 @@ export async function generateIdeas(configInput, prompt, count = 8, {
   const path = config.provider === "ollama" ? "api/chat" : "chat/completions";
   const body = config.provider === "ollama"
     ? { model: config.model, messages, stream: false, format: "json", options: { temperature: 0.6 } }
-    : { model: config.model, messages, stream: false, temperature: 0.6, ...privacyRoutingFor(config) };
+    : {
+      model: config.model,
+      messages,
+      stream: false,
+      temperature: 0.6,
+      ...automationControlsFor(config, 8_000),
+      ...privacyRoutingFor(config),
+    };
   const raw = await request(config, path, { method: "POST", headers: headersFor(config, true), body: JSON.stringify(body) }, fetchImpl, timeoutMs);
   const payload = parseJson(raw);
   const ideas = [];
@@ -683,13 +701,20 @@ Return only valid JSON in this exact shape:
 direction must be supports or contradicts. An excerpt can support one record and contradict another only when the source explicitly does both. Return at most ${MAX_EVIDENCE_PROPOSALS} records.`;
 }
 
-async function runProposalTask(configInput, messages, { fetchImpl = fetch, timeoutMs = 180_000 } = {}) {
+async function runProposalTask(configInput, messages, { fetchImpl = fetch, timeoutMs = DEFAULT_AUTOMATED_TIMEOUT_MS } = {}) {
   const config = normalizeConfig(configInput);
   if (!config.model) throw new ConnectorError("missing_model", "Choose a model before asking for AI proposals.");
   const path = config.provider === "ollama" ? "api/chat" : "chat/completions";
   const body = config.provider === "ollama"
     ? { model: config.model, messages, stream: false, format: "json", options: { temperature: 0.1 } }
-    : { model: config.model, messages, stream: false, temperature: 0.1, ...privacyRoutingFor(config) };
+    : {
+      model: config.model,
+      messages,
+      stream: false,
+      temperature: 0.1,
+      ...automationControlsFor(config, 12_000),
+      ...privacyRoutingFor(config),
+    };
   const raw = await request(
     config,
     path,
@@ -1103,6 +1128,7 @@ export async function researchEvidence(
     messages: searchMessages,
     stream: false,
     temperature: 0.1,
+    ...automationControlsFor(config, 6_000),
     provider: OPENROUTER_PRIVATE_ROUTING,
     tools: [{
       type: "openrouter:web_search",
@@ -1143,6 +1169,7 @@ export async function researchEvidence(
     messages: extractionMessages,
     stream: false,
     temperature: 0.1,
+    ...automationControlsFor(config, 8_000),
     provider: OPENROUTER_PRIVATE_ROUTING,
   };
   const extractionPayload = parseJson(await request(

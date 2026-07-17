@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
+import socket
 from typing import Any
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 from .protocol import ModelConfig, ProtocolError
 
 
 MAX_HTTP_RESPONSE_BYTES = 2_000_000
+CLAUDE_46_MODEL = re.compile(
+    r"^anthropic/claude-(?:(?:opus|sonnet)-4\.6|4\.6-(?:opus|sonnet))(?:$|[-:])",
+    re.IGNORECASE,
+)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -22,6 +29,12 @@ def _completion_url(base_url: str) -> str:
     if base_url.endswith("/chat/completions"):
         return base_url
     return f"{base_url.rstrip('/')}/chat/completions"
+
+
+def _uses_bounded_reasoning(model: str) -> bool:
+    """Limit OpenRouter reasoning controls to Claude 4.6 model identifiers."""
+
+    return bool(CLAUDE_46_MODEL.match(model.strip()))
 
 
 def _parse_content(payload: Any, output_limit: int) -> str:
@@ -45,13 +58,21 @@ def chat_completion(
 ) -> str:
     """Call exactly the endpoint approved in the request; never read credentials elsewhere."""
 
+    body_data: dict[str, Any] = {
+        "model": config.model,
+        "messages": messages,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+    }
+    if (urlsplit(config.base_url).hostname or "").casefold() == "openrouter.ai":
+        if _uses_bounded_reasoning(config.model):
+            # Claude 4.6 defaults to adaptive reasoning on OpenRouter. SIFT's
+            # bounded workflow needs predictable latency, so automated passes
+            # use low effort and never return reasoning text over IPC.
+            body_data["reasoning"] = {"effort": "low", "exclude": True}
+        body_data["provider"] = {"data_collection": "deny", "zdr": True}
     body = json.dumps(
-        {
-            "model": config.model,
-            "messages": messages,
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-        },
+        body_data,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -80,7 +101,13 @@ def chat_completion(
         if exc.code >= 500:
             raise ProtocolError("provider_unavailable", "The model endpoint is temporarily unavailable.", retryable=True) from None
         raise ProtocolError("provider_error", "The model endpoint rejected the request.") from None
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except TimeoutError:
+        raise ProtocolError("request_timeout", "The model request reached its time limit.", retryable=True) from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise ProtocolError("request_timeout", "The model request reached its time limit.", retryable=True) from None
+        raise ProtocolError("provider_unavailable", "The model endpoint could not be reached.", retryable=True) from None
+    except OSError:
         raise ProtocolError("provider_unavailable", "The model endpoint could not be reached.", retryable=True) from None
     if len(raw) > MAX_HTTP_RESPONSE_BYTES:
         raise ProtocolError("provider_response_too_large", "The model endpoint returned too much data.")

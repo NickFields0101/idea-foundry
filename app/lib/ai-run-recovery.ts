@@ -114,14 +114,17 @@ export function classifyAiRunFailure(value: unknown, provider?: string): AiRunRe
     return recovery("cancelled", "The AI run was cancelled. Start it again when you are ready.");
   }
   if (/\bstandardgenerationfailure\b|\bstandard_generation_(?:request|quality_gate)\b/.test(signal)) {
+    const fallbackTimedOut = /\b(?:timeout|timed out|worker_timeout|request_timeout)\b|took too long|time limit|time budget/.test(signal);
     return recovery(
       "standard_generation",
-      /\bstandard_generation_quality_gate\b/.test(signal)
+      fallbackTimedOut
+        ? "SIFT's standard idea generator also reached its time limit during the lighter recovery request. No partial idea set was applied. Try again or choose a faster model."
+        : /\bstandard_generation_quality_gate\b/.test(signal)
         ? "SIFT's standard idea generator returned ideas that did not pass the local quality check. Try a different model or make the opportunity boundary more specific."
         : "SIFT's standard idea generator could not return a usable idea set. Try again or choose another model.",
     );
   }
-  if (/\b(?:timeout|timed out|worker_timeout)\b|took too long|time limit|time budget/.test(signal)) {
+  if (/\b(?:timeout|timed out|worker_timeout|request_timeout|stage_timeout)\b|took too long|time limit|time budget/.test(signal)) {
     return recovery(
       "timeout",
       "The model did not finish in time. Try again or choose a faster model.",

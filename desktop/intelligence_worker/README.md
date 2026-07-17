@@ -176,8 +176,8 @@ the requested number of unique ideas:
     }
   }],
   "diagnostics": {
-    "framesGenerated": 8,
-    "rawCandidatesGenerated": 12,
+    "framesGenerated": 6,
+    "rawCandidatesGenerated": 8,
     "candidatesReturned": 4,
     "method": "frame-diverge-critique"
   }
