@@ -1,6 +1,6 @@
 {
   "name": "sift",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "SIFT: local-first deterministic idea generation and evidence validation for Xahau and Evernode.",
   "author": "Nick Fields",
   "homepage": "https://github.com/NickFields0101/sift#readme",
