@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 PROTOCOL = "sift-intelligence/1"
-WORKER_VERSION = "0.2.0"
+WORKER_VERSION = "0.2.1"
 CAPABILITIES = ("ping", "health", "run", "competitor_red_team", "idea_forge", "cancel")
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -129,7 +129,7 @@ def _bounded_int(record: dict[str, Any], key: str, default: int, minimum: int, m
 
 def validate_budget(value: Any, *, task: str = "competitor_red_team") -> Budget:
     defaults = Budget() if task == "competitor_red_team" else Budget(
-        timeout_ms=180_000,
+        timeout_ms=300_000,
         max_steps=16,
         max_model_calls=3,
         max_input_chars=60_000,
@@ -144,7 +144,13 @@ def validate_budget(value: Any, *, task: str = "competitor_red_team") -> Budget:
         "budget",
     )
     return Budget(
-        timeout_ms=_bounded_int(record, "timeoutMs", defaults.timeout_ms, 1_000, 180_000),
+        timeout_ms=_bounded_int(
+            record,
+            "timeoutMs",
+            defaults.timeout_ms,
+            1_000,
+            300_000 if task == "idea_forge" else 180_000,
+        ),
         max_steps=_bounded_int(record, "maxSteps", defaults.max_steps, 4, 16),
         max_model_calls=_bounded_int(record, "maxModelCalls", defaults.max_model_calls, 1, 3),
         max_input_chars=_bounded_int(record, "maxInputChars", defaults.max_input_chars, 1_000, 60_000),

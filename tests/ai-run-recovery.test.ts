@@ -31,6 +31,23 @@ test("allows the bounded standard generator to recover from an Idea Forge timeou
   });
 });
 
+test("a timed-out standard fallback stops the recovery chain and is not blamed on Idea Forge", () => {
+  const forgeFailure = classifyAiRunFailure({
+    code: "timeout",
+    publicMessage: "The intelligence run reached its time limit.",
+  });
+  assert.equal(forgeFailure.allowIdeaForgeFallback, true);
+
+  const fallbackFailure = classifyAiRunFailure(createStandardGenerationFailure(
+    "request",
+    { code: "timeout", publicMessage: "The model endpoint timed out." },
+  ));
+  assert.equal(fallbackFailure.category, "standard_generation");
+  assert.equal(fallbackFailure.allowIdeaForgeFallback, false);
+  assert.match(fallbackFailure.userMessage, /standard idea generator/i);
+  assert.doesNotMatch(fallbackFailure.userMessage, /Idea Forge/i);
+});
+
 test("allows the standard generator to recover from Idea Forge schema failures", () => {
   for (const failure of [
     { code: "invalid_model_output", message: "The model returned an unsupported response." },

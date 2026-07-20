@@ -25,6 +25,17 @@ from .tasks import run_competitor_red_team
 
 MAX_LINE_CHARS = 100_000
 MAX_ACTIVE_RUNS = 2
+IDEA_FORGE_FINALIZATION_RESERVE_MS = 10_000
+IDEA_FORGE_STAGE_DEADLINES = {
+    "framing": 0.25,
+    "diverging": 0.60,
+    "critiquing": 1.0,
+}
+IDEA_FORGE_STAGE_LABELS = {
+    "framing": "framing",
+    "diverging": "divergence",
+    "critiquing": "final hypothesis",
+}
 
 
 class _RunState:
@@ -120,6 +131,34 @@ class Worker:
         elapsed_ms = int((time.monotonic() - state.started) * 1_000)
         return max(1.0, (state.request.budget.timeout_ms - elapsed_ms) / 1_000)
 
+    def _idea_forge_stage_seconds(self, state: _RunState, stage: str) -> float:
+        """Reserve time for later passes and local result validation.
+
+        Deadlines are cumulative, so time saved by an early pass is available
+        to the next pass, but an early pass can never consume the final pass's
+        allocation.
+        """
+
+        ratio = IDEA_FORGE_STAGE_DEADLINES.get(stage)
+        if ratio is None:
+            raise ProtocolError("internal_error", "The intelligence worker could not schedule this pass.")
+        total_ms = state.request.budget.timeout_ms
+        reserve_ms = min(
+            IDEA_FORGE_FINALIZATION_RESERVE_MS,
+            max(1_000, total_ms // 20),
+        )
+        usable_ms = max(1_000, total_ms - reserve_ms)
+        elapsed_ms = int((time.monotonic() - state.started) * 1_000)
+        stage_remaining_ms = int(usable_ms * ratio) - elapsed_ms
+        if stage_remaining_ms <= 0:
+            label = IDEA_FORGE_STAGE_LABELS[stage]
+            raise ProtocolError(
+                "stage_timeout",
+                f"Idea Forge's {label} pass reached its reserved time limit.",
+                retryable=True,
+            )
+        return max(1.0, stage_remaining_ms / 1_000)
+
     def _execute(self, state: _RunState) -> None:
         run_id = state.request.run_id
         try:
@@ -143,12 +182,22 @@ class Worker:
                         raise ProtocolError("budget_exceeded", "The intelligence run exceeded its model-call budget.")
                     state.model_calls += 1
                     self._progress(state, stage, percent, message, {"pass": state.model_calls, "passes": 3})
-                    response = self._model_client(
-                        state.request.model,
-                        messages,
-                        timeout_seconds=self._remaining_seconds(state),
-                        output_limit=state.request.budget.max_output_chars,
-                    )
+                    try:
+                        response = self._model_client(
+                            state.request.model,
+                            messages,
+                            timeout_seconds=self._idea_forge_stage_seconds(state, stage),
+                            output_limit=state.request.budget.max_output_chars,
+                        )
+                    except ProtocolError as error:
+                        if error.code == "request_timeout":
+                            label = IDEA_FORGE_STAGE_LABELS[stage]
+                            raise ProtocolError(
+                                "stage_timeout",
+                                f"Idea Forge's {label} pass reached its reserved time limit.",
+                                retryable=True,
+                            ) from None
+                        raise
                     self._check(state)
                     return response
 

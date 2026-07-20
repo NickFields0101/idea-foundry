@@ -437,8 +437,11 @@ def run_idea_forge(
     requested_count = request.input["requestedCount"]
     profile_mode = request.input["profile"]["mode"]
     personal_fit_example = "null" if profile_mode == "neutral" else "50"
-    frame_count = min(12, max(8, requested_count))
-    raw_count = min(36, max(requested_count * 3, requested_count + 4))
+    # Intermediate breadth is deliberately smaller than the historical 8/3x
+    # slate. The critic still returns the requested number of complete ideas,
+    # while deep models spend less time restating throwaway hypotheses.
+    frame_count = min(10, max(6, requested_count))
+    raw_count = min(24, max(requested_count * 2, requested_count + 4))
     input_json = json.dumps(request.input, ensure_ascii=False, separators=(",", ":"))
 
     frame_system = f"""You are the opportunity-framing pass in SIFT's idea forge.

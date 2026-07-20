@@ -55,7 +55,7 @@ function ideaForgeInputFixture() {
         workStylePreferences: [{ label: "Autonomy", orientation: "Prefers independent work" }],
       },
     },
-    limits: { timeoutMs: 180_000 },
+    limits: { timeoutMs: 300_000 },
   };
 }
 

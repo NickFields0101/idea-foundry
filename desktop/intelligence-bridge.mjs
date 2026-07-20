@@ -9,8 +9,9 @@ const STARTUP_TIMEOUT_MS = 8_000;
 const DEFAULT_RUN_TIMEOUT_MS = 120_000;
 const MIN_RUN_TIMEOUT_MS = 10_000;
 const MAX_RUN_TIMEOUT_MS = 120_000;
-const DEFAULT_FORGE_TIMEOUT_MS = 180_000;
-const MAX_FORGE_TIMEOUT_MS = 180_000;
+const DEFAULT_FORGE_TIMEOUT_MS = 300_000;
+const MAX_FORGE_TIMEOUT_MS = 300_000;
+const SUPERVISOR_GRACE_MS = 10_000;
 const CANCEL_GRACE_MS = 2_000;
 const MAX_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_BUFFER_BYTES = MAX_LINE_BYTES * 2;
@@ -658,7 +659,12 @@ export class IntelligenceSupervisor {
         : "Starting the local intelligence engine.",
       percent: 0,
     });
-    run.timeout = setTimeout(() => this.#timeoutRun(run), built.timeoutMs);
+    // Let the worker report a stage-specific timeout before the supervisor
+    // terminates the process. The renderer keeps a slightly wider deadline.
+    run.timeout = setTimeout(
+      () => this.#timeoutRun(run),
+      built.timeoutMs + (built.task === "idea_forge" ? SUPERVISOR_GRACE_MS : 0),
+    );
     run.timeout.unref?.();
     try {
       this.#send({ protocol: INTELLIGENCE_PROTOCOL, type: "request", id: runId, method: "run", params: built.params });

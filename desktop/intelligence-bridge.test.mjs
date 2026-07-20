@@ -69,7 +69,7 @@ function forgeInput() {
         ],
       },
     },
-    limits: { timeoutMs: 180_000 },
+    limits: { timeoutMs: 300_000 },
   };
 }
 
@@ -110,7 +110,7 @@ test("Idea Forge input is exact, bounded, and excludes raw personality scores", 
   const validated = validateStartInput(forgeInput());
   assert.equal(validated.task, "idea_forge");
   assert.equal(validated.context.requestedCount, 4);
-  assert.equal(validated.limits.timeoutMs, 180_000);
+  assert.equal(validated.limits.timeoutMs, 300_000);
 
   const rawScores = forgeInput();
   rawScores.context.profile.personalityScores = { openness: 99 };
@@ -133,8 +133,8 @@ test("Idea Forge input is exact, bounded, and excludes raw personality scores", 
   assert.throws(() => validateStartInput(extraPreferenceField), /unsupported field/i);
 
   const excessiveTimeout = forgeInput();
-  excessiveTimeout.limits.timeoutMs = 180_001;
-  assert.throws(() => validateStartInput(excessiveTimeout), /between 10000 and 180000/i);
+  excessiveTimeout.limits.timeoutMs = 300_001;
+  assert.throws(() => validateStartInput(excessiveTimeout), /between 10000 and 300000/i);
 });
 
 test("Idea Forge translation preserves the profile structure and uses its bounded model budget", () => {
@@ -144,7 +144,7 @@ test("Idea Forge translation preserves the profile structure and uses its bounde
   assert.deepEqual(built.params.input, forgeInput().context);
   assert.equal(built.params.model.temperature, 0.65);
   assert.equal(built.params.model.apiKey, connector.apiKey);
-  assert.equal(built.params.budget.timeoutMs, 180_000);
+  assert.equal(built.params.budget.timeoutMs, 300_000);
   assert.equal(built.params.budget.maxSteps, 12);
   assert.equal(built.params.budget.maxModelCalls, 3);
   assert.equal(built.params.budget.maxOutputChars, 60_000);
@@ -448,7 +448,7 @@ function close(server) {
 
 test("real Python worker completes all three Idea Forge passes", async () => {
   const frames = {
-    frames: Array.from({ length: 8 }, (_value, index) => ({
+    frames: Array.from({ length: 6 }, (_value, index) => ({
       label: `Frame ${index + 1}`,
       user: `Shopper segment ${index + 1}`,
       triggeringSituation: `A shopper compares packaged foods in situation ${index + 1}.`,
@@ -461,7 +461,7 @@ test("real Python worker completes all three Idea Forge passes", async () => {
   const candidates = {
     candidates: Array.from({ length: 5 }, (_value, index) => ({
       title: `Raw food guide ${index + 1}`,
-      frameLabel: `Frame ${(index % 8) + 1}`,
+      frameLabel: `Frame ${(index % 6) + 1}`,
       concept: `Explain one bounded ingredient decision for shopper group ${index + 1}.`,
       user: `Shopper group ${index + 1}`,
       buyer: `Consumer in group ${index + 1}`,
