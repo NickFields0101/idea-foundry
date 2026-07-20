@@ -18,3 +18,10 @@ SIFT scores each response according to the published positive/reverse-keyed item
 The assessment is offered for self-reflection and optional idea personalization. It is not the proprietary NEO Personality Inventory-3 (NEO-PI-3), is not a clinical or diagnostic instrument, and must not be used for hiring or other consequential decisions.
 
 Public-domain status and source pages checked 2026-07-10. The rest of SIFT remains subject to the repository's [MIT License](LICENSE).
+
+## Mozilla PDF.js
+
+SIFT uses the `pdfjs-dist` generic browser build to extract selectable text from user-chosen PDF idea documents on the local device. PDF.js is distributed under the Apache License 2.0.
+
+- Project: https://mozilla.github.io/pdf.js/
+- Source and license: https://github.com/mozilla/pdf.js

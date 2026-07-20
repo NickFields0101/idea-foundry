@@ -9,6 +9,8 @@ test("desktop renderer has no direct network authority", async () => {
   ]);
   assert.match(html, /connect-src 'none'/);
   assert.match(html, /object-src 'none'/);
+  assert.match(html, /worker-src 'self'/);
+  assert.doesNotMatch(html, /worker-src[^;]*blob:/);
   assert.match(html, /frame-ancestors 'none'/);
   assert.match(preload, /contextBridge\.exposeInMainWorld\("sift"/);
   assert.doesNotMatch(preload, /idea-foundry:/);
@@ -206,7 +208,7 @@ test("Create to Build separates a fresh thesis decision from venture validation 
   assert.match(oneShot, /ideas: stateAtCommit\.ideas/);
   assert.doesNotMatch(oneShot, /selectedAtStart|completeAutomatedResearchRun|applyResearchEvidenceBatch|committed: true/);
   assert.doesNotMatch(oneShot, /window\.confirm|reviewerVerified\s*:\s*true|acknowledgedCounterEvidenceIds/);
-  assert.match(page, /Create → Compare → Research → Decide → Build-ready/);
+  assert.match(page, /Idea → Research → Check → Decide → Build-ready/);
   assert.match(page, /Start building/);
   const inspectStart = page.indexOf("function inspectQuickRunOutcome");
   const inspectEnd = page.indexOf("async function saveAiConnectionOrOpenSettings", inspectStart);
@@ -416,12 +418,56 @@ test("workspace reset and import purge ephemeral AI source material", async () =
   assert.match(resetFunction, /generationRequestRef\.current \+= 1/);
   assert.match(resetFunction, /quickRunRequestRef\.current \+= 1/);
   assert.match(resetFunction, /setGeneratingIdeas\(false\)/);
+  assert.match(resetFunction, /setIdeaImportWorkspace\(null\)/);
+  assert.match(resetFunction, /ideaImportRequestRef\.current \+= 1/);
   const importStart = page.indexOf("function importPacket");
   const importEnd = page.indexOf("async function copyText", importStart);
   assert.match(page.slice(importStart, importEnd), /resetAiWorkspace\(\)/);
   assert.match(page, /removeCurrentAndLegacyStorageValues\([^]*localStorage[^]*STORAGE_KEY[^]*PRE_SIFT_PROJECT_STORAGE_KEY[^]*resetAiWorkspace\(\)/);
   assert.match(page, /currentEvidenceVerificationFingerprint/);
   assert.match(page, /reviewerVerified: evidenceHumanVerificationCurrent/);
+});
+
+test("idea document import stays transient and saves one candidate atomically", async () => {
+  const [page, importer] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/idea-file-import.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /type="file"[^]*accept=\{IDEA_FILE_ACCEPT\}/);
+  assert.match(page, /Upload your idea/);
+  assert.match(page, /Read locally/);
+  const structureStart = page.indexOf("async function structureImportedIdeaWithAi");
+  const structureEnd = page.indexOf("function importedCandidateForSave", structureStart);
+  const structure = page.slice(structureStart, structureEnd);
+  assert.match(structure, /saveAiConnectionOrOpenSettings\(\)/);
+  assert.match(structure, /window\.confirm\(/);
+  assert.match(structure, /connection\.bridge\.llm\.generateIdeas\(\{/);
+  assert.match(structure, /count: 1/);
+  assert.match(structure, /profileMode: "neutral"/);
+  assert.match(structure, /candidates\.length !== 1/);
+  assert.match(structure, /if \(runFullCheck\) saveImportedIdea\(true, structuredWorkspace\)/);
+  const saveStart = page.indexOf("function saveImportedIdea");
+  const saveEnd = page.indexOf("function updateIdea", saveStart);
+  const save = page.slice(saveStart, saveEnd);
+  assert.match(save, /const stateAtCommit = stateRef\.current/);
+  assert.match(save, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(nextState\)\)/);
+  assert.ok(save.indexOf("localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState))") < save.indexOf("setState(nextState)"));
+  const persistedShape = save.slice(save.indexOf("const nextState"), save.indexOf("localStorage.setItem"));
+  assert.doesNotMatch(persistedShape, /sourceText|fileName|arrayBuffer/);
+  assert.match(save, /startOneShotRun\(\{ stateOverride: nextState, ideaOverride: candidate \}\)/);
+  assert.match(page, /ideaFileInputRef\.current\.value = ""/);
+  assert.match(page, /ideaImportAbortRef\.current\?\.abort\(\)/);
+  const sourceUpdate = page.slice(page.indexOf("function updateImportedSourceText"), page.indexOf("function closeIdeaImport"));
+  assert.match(sourceUpdate, /current\.aiStructured[^]*emptyIdeaCandidate[^]*aiStructured: false/);
+  assert.match(page, /Structure & check to build-ready/);
+  assert.match(page, /disabled=\{ideaImportBusy !== null\}[^]*value=\{ideaImportWorkspace\.sourceText\}/);
+  assert.match(importer, /streamTextContent\(\)\.getReader\(\)/);
+  assert.match(importer, /MAX_IMPORTED_TEXT_CHARS - extractedCharacters/);
+  assert.match(importer, /reader\.cancel\(\)/);
+  assert.match(importer, /signal\?\.addEventListener\("abort"/);
+  const oneShot = page.slice(page.indexOf("async function startOneShotRun"), page.indexOf("async function startResearchRun"));
+  assert.ok(oneShot.indexOf("else if (providedIdea)") < oneShot.indexOf("generateQualitySlate"));
+  assert.match(oneShot, /generatedCandidates = \[providedIdea\]/);
 });
 
 test("clear all local data resets the UI and the protected desktop connector", async () => {

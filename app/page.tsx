@@ -50,6 +50,14 @@ import {
   selectQualitySlate,
   type IdeaExperimentPlan,
 } from "./lib/idea-quality";
+import { extractIdeaFile } from "./lib/idea-file-import";
+import {
+  IDEA_FILE_ACCEPT,
+  buildIdeaImportPrompt,
+  ideaConceptFromText,
+  normalizeImportedIdeaText,
+  type IdeaFileKind,
+} from "./lib/idea-import-core";
 import {
   addResearchToQuickRunPreview,
   applyResearchEvidenceBatch,
@@ -107,6 +115,29 @@ const THEME_KEY = "sift-theme-v1";
 
 function normalizeIdeaCount(value: number) {
   return Math.max(1, Math.min(12, Math.trunc(Number.isFinite(value) ? value : 1)));
+}
+
+function emptyIdeaCandidate(title = "New candidate", concept = ""): IdeaCandidate {
+  return {
+    id: crypto.randomUUID(),
+    title,
+    concept,
+    user: "",
+    buyer: "",
+    triggeringSituation: "",
+    currentAlternative: "",
+    materialConsequence: "",
+    whyNow: "",
+    distributionWedge: "",
+    adoptionFriction: "",
+    protocolNeed: "",
+    protocolCounterfactual: "",
+    failureReason: "",
+    criticalAssumption: "",
+    experiment: "",
+    route: "Neither yet",
+    scores: { personalFit: 50, opportunitySignal: 50, protocolAffordance: 50, experimentability: 50 },
+  };
 }
 const EVIDENCE_GRADE_LABELS: Record<EvidenceGrade, string> = {
   E0: "Assertion or unknown",
@@ -181,6 +212,18 @@ interface IdeaCandidate {
     engine?: "python_multistage" | "desktop_single_pass";
     pipelineVersion?: string;
   };
+}
+
+interface IdeaImportWorkspace {
+  fileName: string;
+  kind: IdeaFileKind | "notes";
+  sourceText: string;
+  candidate: IdeaCandidate;
+  aiStructured: boolean;
+  truncated: boolean;
+  warnings: string[];
+  pageCount?: number;
+  extractedPages?: number;
 }
 
 interface ProjectDetails {
@@ -1342,6 +1385,11 @@ export default function Home() {
     total?: number;
     message?: string;
   } | null>(null);
+  const [ideaImportOpen, setIdeaImportOpen] = useState(false);
+  const [ideaImportWorkspace, setIdeaImportWorkspace] = useState<IdeaImportWorkspace | null>(null);
+  const [ideaImportBusy, setIdeaImportBusy] = useState<"reading" | "structuring" | null>(null);
+  const [ideaImportError, setIdeaImportError] = useState("");
+  const [latestImportedIdeaId, setLatestImportedIdeaId] = useState("");
   const [aiAssistBusy, setAiAssistBusy] = useState<"evaluation" | "evidence" | null>(null);
   const [evaluationNotes, setEvaluationNotes] = useState("");
   const [evaluationDraft, setEvaluationDraft] = useState<EvaluationDraftState | null>(null);
@@ -1355,6 +1403,7 @@ export default function Home() {
   const [quickRunMode, setQuickRunMode] = useState<QuickRunMode | null>(null);
   const [quickRunOutcome, setQuickRunOutcome] = useState<QuickRunOutcomeState | null>(null);
   const [pendingOneShot, setPendingOneShot] = useState(false);
+  const [pendingOneShotHasIdea, setPendingOneShotHasIdea] = useState(false);
   const [researchRunDraft, setResearchRunDraft] = useState<ResearchRunDraftState | null>(null);
   const [researchApproval, setResearchApproval] = useState(false);
   const [personalityAnswers, setPersonalityAnswers] = useState<Record<number, IpipNeo120Response>>({});
@@ -1367,6 +1416,10 @@ export default function Home() {
   const generationRequestRef = useRef(0);
   const quickRunRequestRef = useRef(0);
   const oneShotCheckpointRef = useRef<OneShotCheckpoint | null>(null);
+  const oneShotIdeaOverrideRef = useRef<IdeaCandidate | null>(null);
+  const ideaFileInputRef = useRef<HTMLInputElement | null>(null);
+  const ideaImportRequestRef = useRef(0);
+  const ideaImportAbortRef = useRef<AbortController | null>(null);
   const modelSearchTimerRef = useRef<number | null>(null);
   const modelSearchRequestRef = useRef(0);
   const modelConfigRequestRef = useRef(0);
@@ -1396,6 +1449,7 @@ export default function Home() {
   const modelEditorLocked = clearingLocalData
     || llmBusy !== null
     || generatingIdeas
+    || ideaImportBusy !== null
     || aiAssistBusy !== null
     || quickRunBusy;
 
@@ -1658,6 +1712,10 @@ export default function Home() {
     generationRequestRef.current += 1;
     quickRunRequestRef.current += 1;
     oneShotCheckpointRef.current = null;
+    oneShotIdeaOverrideRef.current = null;
+    ideaImportRequestRef.current += 1;
+    ideaImportAbortRef.current?.abort();
+    ideaImportAbortRef.current = null;
     setAiAssistBusy(null);
     setEvaluationNotes("");
     setEvaluationDraft(null);
@@ -1669,11 +1727,18 @@ export default function Home() {
     setAiUndo(null);
     setGeneratingIdeas(false);
     setLastGeneration(null);
+    setIdeaImportOpen(false);
+    setIdeaImportWorkspace(null);
+    setIdeaImportBusy(null);
+    setIdeaImportError("");
+    setLatestImportedIdeaId("");
+    if (ideaFileInputRef.current) ideaFileInputRef.current.value = "";
     setQuickRunPhase("idle");
     setQuickRunMessage("");
     setQuickRunMode(null);
     setQuickRunOutcome(null);
     setPendingOneShot(false);
+    setPendingOneShotHasIdea(false);
     setResearchRunDraft(null);
     setResearchApproval(false);
     setLlmApiKey("");
@@ -1859,15 +1924,10 @@ export default function Home() {
     });
   }
 
-  function start(mode: "neutral" | "private") {
-    setState((current) => ({ ...current, started: true, profile: emptyProfile(mode) }));
-    setSection(mode === "private" ? "profile" : "overview");
-  }
-
   function startWithIdea() {
-    start("neutral");
-    addIdea();
+    setState((current) => ({ ...current, started: true, profile: emptyProfile("neutral") }));
     setSection("ideas");
+    addIdea();
   }
 
   function startQuickFromWelcome() {
@@ -1881,27 +1941,191 @@ export default function Home() {
   }
 
   function addIdea() {
-    const idea: IdeaCandidate = {
-      id: crypto.randomUUID(),
-      title: "New candidate",
-      concept: "",
-      user: "",
-      buyer: "",
-      triggeringSituation: "",
-      currentAlternative: "",
-      materialConsequence: "",
-      whyNow: "",
-      distributionWedge: "",
-      adoptionFriction: "",
-      protocolNeed: "",
-      protocolCounterfactual: "",
-      failureReason: "",
-      criticalAssumption: "",
-      experiment: "",
-      route: "Neither yet",
-      scores: { personalFit: 50, opportunitySignal: 50, protocolAffordance: 50, experimentability: 50 },
+    setSection("ideas");
+    setIdeaImportError("");
+    setIdeaImportOpen(true);
+    setIdeaImportWorkspace((current) => current ?? {
+      fileName: "",
+      kind: "notes",
+      sourceText: "",
+      candidate: emptyIdeaCandidate("My idea"),
+      aiStructured: false,
+      truncated: false,
+      warnings: [],
+    });
+  }
+
+  function chooseIdeaFile() {
+    addIdea();
+    ideaFileInputRef.current?.click();
+  }
+
+  function updateImportedCandidate(patch: Partial<IdeaCandidate>) {
+    setIdeaImportWorkspace((current) => current ? {
+      ...current,
+      candidate: { ...current.candidate, ...patch },
+    } : current);
+  }
+
+  function updateImportedSourceText(sourceText: string) {
+    setIdeaImportError("");
+    setIdeaImportWorkspace((current) => {
+      if (!current) return current;
+      const candidate = current.aiStructured
+        ? {
+            ...emptyIdeaCandidate(current.candidate.title, ideaConceptFromText(sourceText)),
+            id: current.candidate.id,
+          }
+        : current.candidate;
+      return {
+        ...current,
+        sourceText,
+        candidate,
+        aiStructured: false,
+        truncated: false,
+        warnings: [],
+      };
+    });
+  }
+
+  function closeIdeaImport() {
+    ideaImportRequestRef.current += 1;
+    ideaImportAbortRef.current?.abort();
+    ideaImportAbortRef.current = null;
+    setIdeaImportBusy(null);
+    setIdeaImportError("");
+    setIdeaImportWorkspace(null);
+    setIdeaImportOpen(false);
+    if (ideaFileInputRef.current) ideaFileInputRef.current.value = "";
+  }
+
+  async function readIdeaFile(file: File) {
+    ideaImportAbortRef.current?.abort();
+    const controller = new AbortController();
+    ideaImportAbortRef.current = controller;
+    const requestId = ++ideaImportRequestRef.current;
+    setIdeaImportBusy("reading");
+    setIdeaImportError("");
+    try {
+      const extraction = await extractIdeaFile(file, { signal: controller.signal });
+      if (requestId !== ideaImportRequestRef.current) return;
+      setIdeaImportWorkspace({
+        fileName: extraction.fileName,
+        kind: extraction.kind,
+        sourceText: extraction.text,
+        candidate: emptyIdeaCandidate(
+          extraction.suggestedTitle,
+          ideaConceptFromText(extraction.text),
+        ),
+        aiStructured: false,
+        truncated: extraction.truncated,
+        warnings: extraction.warnings,
+        ...(extraction.pageCount ? { pageCount: extraction.pageCount } : {}),
+        ...(extraction.extractedPages ? { extractedPages: extraction.extractedPages } : {}),
+      });
+      setIdeaImportOpen(true);
+      setToast("Idea read locally — review it before saving");
+    } catch (error) {
+      if (requestId !== ideaImportRequestRef.current) return;
+      setIdeaImportError(error instanceof Error ? error.message : "SIFT could not read this file.");
+    } finally {
+      if (requestId === ideaImportRequestRef.current) setIdeaImportBusy(null);
+      if (ideaImportAbortRef.current === controller) ideaImportAbortRef.current = null;
+      if (ideaFileInputRef.current) ideaFileInputRef.current.value = "";
+    }
+  }
+
+  async function structureImportedIdeaWithAi(runFullCheck = false) {
+    const workspace = ideaImportWorkspace;
+    if (!workspace || normalizeImportedIdeaText(workspace.sourceText).length < 20) {
+      setIdeaImportError("Upload a file or paste enough detail for SIFT to understand the idea.");
+      return;
+    }
+    const requestId = ++ideaImportRequestRef.current;
+    setIdeaImportBusy("structuring");
+    setIdeaImportError("");
+    try {
+      const connection = await saveAiConnectionOrOpenSettings();
+      if (!connection || requestId !== ideaImportRequestRef.current) return;
+      if (!isLoopbackEndpoint(connection.saved.baseUrl) && !window.confirm(
+        `SIFT read the file on this computer. This next step sends the extracted text — not the original file — to ${LLM_PROVIDERS[connection.saved.provider].label} and the selected model provider. Continue?`,
+      )) return;
+      const result = await connection.bridge.llm.generateIdeas({
+        prompt: buildIdeaImportPrompt({
+          title: workspace.candidate.title || workspace.fileName || "Imported idea",
+          text: workspace.sourceText,
+        }),
+        count: 1,
+        profileMode: "neutral",
+        provider: connection.saved.provider,
+        baseUrl: connection.saved.baseUrl,
+        model: connection.saved.model,
+      });
+      if (requestId !== ideaImportRequestRef.current) return;
+      const candidates = generatedCandidatesFromResult(result, false);
+      if (candidates.length !== 1) {
+        throw new Error("The model did not return one complete, usable idea. Your extracted text is still here.");
+      }
+      const structuredWorkspace: IdeaImportWorkspace = {
+        ...workspace,
+        candidate: candidates[0],
+        aiStructured: true,
+      };
+      setIdeaImportWorkspace(structuredWorkspace);
+      if (runFullCheck) saveImportedIdea(true, structuredWorkspace);
+      else setToast("AI draft ready — review it before saving");
+    } catch (error) {
+      if (requestId !== ideaImportRequestRef.current) return;
+      setIdeaImportError(error instanceof Error ? error.message : "The model could not structure this idea.");
+    } finally {
+      if (requestId === ideaImportRequestRef.current) setIdeaImportBusy(null);
+    }
+  }
+
+  function importedCandidateForSave(workspace: IdeaImportWorkspace) {
+    const sourceText = normalizeImportedIdeaText(workspace.sourceText);
+    return {
+      ...workspace.candidate,
+      title: workspace.candidate.title.trim() || "Imported idea",
+      concept: workspace.candidate.concept.trim() || ideaConceptFromText(sourceText),
     };
-    setState((current) => ({ ...current, ideas: [...current.ideas, idea] }));
+  }
+
+  function saveImportedIdea(runFullCheck = false, workspaceOverride?: IdeaImportWorkspace) {
+    const workspace = workspaceOverride ?? ideaImportWorkspace;
+    if (!workspace) return;
+    if (normalizeImportedIdeaText(workspace.sourceText).length < 20 && !workspace.candidate.concept.trim()) {
+      setIdeaImportError("Add a clear description of the idea before saving it.");
+      return;
+    }
+    const candidate = importedCandidateForSave(workspace);
+    const stateAtCommit = stateRef.current;
+    if (stateAtCommit.ideas.some((idea) => idea.id === candidate.id)) return;
+    if (runFullCheck && stateAtCommit.project.selectedIdeaId !== candidate.id
+      && reviewHasMaterialWork(stateAtCommit.review)
+      && !window.confirm("Check this imported idea? This will replace the current idea's live review, gates, and evidence. Existing ideas will remain saved.")) {
+      return;
+    }
+    const nextState: AppState = {
+      ...stateAtCommit,
+      ideas: [...stateAtCommit.ideas, candidate],
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+    } catch {
+      setIdeaImportError("SIFT could not save this idea on the computer. The editable draft is still here.");
+      return;
+    }
+    stateRef.current = nextState;
+    setState(nextState);
+    setLatestImportedIdeaId(candidate.id);
+    closeIdeaImport();
+    if (runFullCheck) {
+      void startOneShotRun({ stateOverride: nextState, ideaOverride: candidate });
+    } else {
+      setSection("ideas");
+      setToast("Idea saved — it is marked New below");
+    }
   }
 
   function updateIdea(id: string, patch: Partial<IdeaCandidate>) {
@@ -2492,8 +2716,10 @@ export default function Home() {
     }
   }
 
-  async function startOneShotRun(options: { stateOverride?: AppState; promptOverride?: string } = {}) {
+  async function startOneShotRun(options: { stateOverride?: AppState; promptOverride?: string; ideaOverride?: IdeaCandidate } = {}) {
     if (clearingLocalDataRef.current) return;
+    if (options.ideaOverride) oneShotIdeaOverrideRef.current = options.ideaOverride;
+    const requestedIdea = options.ideaOverride ?? oneShotIdeaOverrideRef.current;
     setQuickRunMode("one-shot");
     setQuickRunOutcome(null);
     setResearchRunDraft(null);
@@ -2502,14 +2728,20 @@ export default function Home() {
       setQuickRunPhase("idle");
       setQuickRunMode(null);
       setPendingOneShot(true);
-      setLlmMessage("Connect an AI model once, then generate and screen a new idea from Home.");
+      setPendingOneShotHasIdea(Boolean(requestedIdea));
+      setLlmMessage(requestedIdea
+        ? "Connect an AI model once, then continue checking your imported idea without starting over."
+        : "Connect an AI model once, then generate and screen a new idea from Home.");
       setLlmMessageTone("neutral");
       setSection("model");
       return;
     }
 
     const runId = ++quickRunRequestRef.current;
+    setPendingOneShot(false);
+    setPendingOneShotHasIdea(false);
     const stateAtStart = options.stateOverride ?? stateRef.current;
+    const providedIdea = requestedIdea;
     const generationPromptBase = options.promptOverride ?? prompt;
     const evaluationNotesAtStart = evaluationNotesRef.current;
     const liveFingerprintAtStart = oneShotInputFingerprint(
@@ -2519,9 +2751,11 @@ export default function Home() {
       stateAtStart.ideas,
       evaluationNotesAtStart,
     );
-    let activeStep = "idea generation";
+    let activeStep = providedIdea ? "idea screening" : "idea generation";
     setQuickRunPhase("generating");
-    setQuickRunMessage("Generating four fresh business ideas and choosing the strongest profile match.");
+    setQuickRunMessage(providedIdea
+      ? "Preparing your idea for research, screening, and a build-ready decision."
+      : "Generating four fresh business ideas and choosing the strongest profile match.");
     setSection("quick");
 
     try {
@@ -2535,11 +2769,11 @@ export default function Home() {
         return;
       }
 
-      const selectedBy = "automated-priority" as const;
+      const selectedBy = providedIdea ? "existing-user-choice" as const : "automated-priority" as const;
       const ideaScreenReview = freshIdeaScreenReview();
       const checkpointFingerprint = secureFingerprint(JSON.stringify([
         liveFingerprintAtStart,
-        generationPromptBase,
+        providedIdea ? ["provided-idea", providedIdea] : ["generated-ideas", generationPromptBase],
         connection.saved.provider,
         connection.saved.baseUrl,
         connection.saved.model,
@@ -2560,6 +2794,28 @@ export default function Home() {
         projectSnapshot = checkpoint.projectSnapshot;
         selectionPriority = checkpoint.selectionPriority;
         setQuickRunMessage("Resuming this run. The generated ideas are already saved for this session.");
+      } else if (providedIdea) {
+        generatedCandidates = [providedIdea];
+        chosenIdea = providedIdea;
+        projectSnapshot = {
+          ...stateAtStart.project,
+          title: providedIdea.title,
+          selectedIdeaId: providedIdea.id,
+        };
+        selectionPriority = calculateGenerationPriority(stateAtStart.profile, providedIdea.scores);
+        checkpoint = {
+          fingerprint: checkpointFingerprint,
+          generatedCandidates,
+          chosenIdea,
+          projectSnapshot,
+          selectionPriority,
+          researchComplete: false,
+          contextNote: "",
+          intelligenceComplete: false,
+          intelligenceNote: "",
+        };
+        oneShotCheckpointRef.current = checkpoint;
+        setQuickRunMessage("Idea prepared. Researching public context before the thesis screen.");
       } else {
         const slate = await generateQualitySlate(connection, stateAtStart, 4, {
           promptOverride: generationPromptBase,
@@ -2809,6 +3065,7 @@ export default function Home() {
       }
       stateRef.current = nextState;
       oneShotCheckpointRef.current = null;
+      oneShotIdeaOverrideRef.current = null;
       setState(nextState);
       setAiUndo({
         label: "new-idea thesis screen",
@@ -3315,12 +3572,27 @@ export default function Home() {
   function exitQuickRun() {
     quickRunRequestRef.current += 1;
     oneShotCheckpointRef.current = null;
+    oneShotIdeaOverrideRef.current = null;
+    setPendingOneShot(false);
+    setPendingOneShotHasIdea(false);
     setQuickRunPhase("idle");
     setQuickRunMessage("");
     setQuickRunMode(null);
     setResearchRunDraft(null);
     setResearchApproval(false);
     if (section === "quick") setSection("overview");
+  }
+
+  function openOneShotAiSettings() {
+    quickRunRequestRef.current += 1;
+    setPendingOneShot(true);
+    setPendingOneShotHasIdea(Boolean(oneShotIdeaOverrideRef.current));
+    setQuickRunPhase("idle");
+    setQuickRunMessage("");
+    setQuickRunMode(null);
+    setResearchRunDraft(null);
+    setResearchApproval(false);
+    setSection("model");
   }
 
   function beginValidation() {
@@ -3789,7 +4061,7 @@ export default function Home() {
               {hydrated && desktopAvailable === false
                 ? <a className="button primary" href="https://github.com/NickFields0101/sift/releases/latest" target="_blank" rel="noreferrer">Get SIFT Desktop <span aria-hidden="true">→</span></a>
                 : <button className="button primary" onClick={startQuickFromWelcome}>Create to build <span aria-hidden="true">→</span></button>}
-              <button className="button secondary" onClick={startWithIdea}>I already have an idea</button>
+              <button className="button secondary" onClick={startWithIdea}>Bring my own idea</button>
             </div>
           </div>
           <aside className="hero-art" aria-label="SIFT tornado artwork">
@@ -3855,6 +4127,17 @@ export default function Home() {
       </aside>
 
       <section className="workspace">
+        <input
+          ref={ideaFileInputRef}
+          className="sr-only"
+          type="file"
+          accept={IDEA_FILE_ACCEPT}
+          aria-label="Upload an idea document"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void readIdeaFile(file);
+          }}
+        />
         {quickRunPhase !== "idle" && quickRunMode === "guided" && section !== "quick" && (
           <QuickRunGuide
             phase={quickRunPhase}
@@ -3874,6 +4157,7 @@ export default function Home() {
             oneShotReady={desktopAvailable === true && llmReady}
             quickRunBusy={quickRunBusy}
             onOneShotRun={() => void startOneShotRun()}
+            onBringIdea={addIdea}
             onQuickRun={() => void startQuickRun()}
             onGuidedQuickRun={() => void startGuidedQuickRun()}
             onNavigate={setSection}
@@ -3896,7 +4180,7 @@ export default function Home() {
               eyebrow={quickRunMode === "one-shot" ? "Create to build" : quickRunMode === "research" ? "Research & check" : quickRunMode === "auto-preview" ? "AI preview" : "Guided flow"}
               title={quickRunMode === "one-shot" ? "Taking your idea to a build decision." : quickRunMode === "research" ? "Researching the market." : quickRunMode === "auto-preview" ? "Preparing your preview." : "Working through each step."}
               description={quickRunMode === "one-shot"
-                ? "SIFT is generating options, comparing them, researching public context, checking the winner, and preparing its build handoff."
+                ? "SIFT is creating or preparing the idea, researching public context, checking it, and producing the build handoff."
                 : quickRunMode === "research"
                 ? "SIFT is checking public sources and preserving exact citations before you decide what to save."
                 : quickRunMode === "auto-preview"
@@ -3905,11 +4189,11 @@ export default function Home() {
             />
             <section className="quick-run-working" aria-live="polite">
               <img src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" />
-              <div><span>{quickRunBusy ? "Working" : quickRunMode === "one-shot" && quickRunMessage.startsWith("Needs attention:") ? "Needs attention" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next step."}</h2><p>{quickRunMode === "one-shot" ? "Create → Compare → Research → Decide → Build-ready" : quickRunMode === "research" ? "Idea → Research → Review → Result" : "Idea → Check → Evidence → Decision"}</p></div>
+              <div><span>{quickRunBusy ? "Working" : quickRunMode === "one-shot" && quickRunMessage.startsWith("Needs attention:") ? "Needs attention" : "Ready"}</span><h2>{quickRunMessage || "Preparing the next step."}</h2><p>{quickRunMode === "one-shot" ? "Idea → Research → Check → Decide → Build-ready" : quickRunMode === "research" ? "Idea → Research → Review → Result" : "Idea → Check → Evidence → Decision"}</p></div>
               {quickRunBusy && <i aria-hidden="true" />}
             </section>
             <div className="quick-run-boundary"><strong>{quickRunMode === "one-shot" ? "New ideas start with no customer evidence." : quickRunMode === "research" ? "Public research is not customer validation." : quickRunMode === "auto-preview" ? "A preview is not a saved decision." : "You stay in control."}</strong><span>{quickRunMode === "one-shot" ? "Public research adds context. Interviews and experiments begin after you choose the idea." : quickRunMode === "research" ? "Cited sources can add context, but only real-world tests can validate demand." : quickRunMode === "auto-preview" ? "AI works in a separate copy. Your saved review does not change." : "SIFT drafts the work and pauses where your approval matters."}</span></div>
-            <div className="quick-run-recovery-actions">{quickRunMode === "one-shot" && quickRunPhase === "idle" && <><button className="button primary" onClick={() => void startOneShotRun()}>Try again</button><button className="button secondary" onClick={() => { exitQuickRun(); setSection("model"); }}>AI settings</button></>}<button className="button secondary" onClick={exitQuickRun}>{quickRunMode === "one-shot" ? "Back home" : "Exit"}</button></div>
+            <div className="quick-run-recovery-actions">{quickRunMode === "one-shot" && quickRunPhase === "idle" && <><button className="button primary" onClick={() => void startOneShotRun()}>Try again</button><button className="button secondary" onClick={openOneShotAiSettings}>AI settings</button></>}<button className="button secondary" onClick={exitQuickRun}>{quickRunMode === "one-shot" ? "Back home" : "Exit"}</button></div>
           </div>
         )}
 
@@ -3937,9 +4221,51 @@ export default function Home() {
                 ) : (
                   <button className="button primary" onClick={() => copyText(prompt, "LLM prompt copied")}>Copy prompt for my LLM</button>
                 )}
-                <details className="idea-start-more"><summary>Other ways to start</summary><div><button className="button secondary" onClick={loadStarterSlate}>Try 4 examples</button><button className="button ghost" onClick={addIdea}>Add my own idea</button></div></details>
+                <button className="button secondary" disabled={ideaImportBusy !== null} onClick={chooseIdeaFile}>{ideaImportBusy === "reading" ? "Reading…" : "Upload your idea"}</button>
+                <details className="idea-start-more"><summary>Other ways to start</summary><div><button className="button secondary" onClick={loadStarterSlate}>Try 4 examples</button><button className="button ghost" onClick={addIdea}>Paste or write it</button></div></details>
               </div>
             </div>
+            {ideaImportOpen && ideaImportWorkspace && (
+              <section className="idea-import-panel">
+                <div className="idea-import-head">
+                  <div><p className="eyebrow">Bring your idea</p><h2>{ideaImportWorkspace.fileName ? "Review what SIFT read." : "Upload, paste, or write."}</h2><p>The document describes your hypothesis. It is not customer evidence and will never be added to the evidence ledger.</p></div>
+                  <button className="text-button" onClick={closeIdeaImport}>Close</button>
+                </div>
+                <div className="idea-import-status">
+                  <strong>{ideaImportWorkspace.fileName || "No file selected"}</strong>
+                  <span>{ideaImportWorkspace.fileName ? `Read locally · ${ideaImportWorkspace.sourceText.length.toLocaleString()} characters${ideaImportWorkspace.pageCount ? ` · ${ideaImportWorkspace.extractedPages}/${ideaImportWorkspace.pageCount} pages` : ""}` : "PDF, TXT, Markdown, JSON, CSV, or YAML · Export Word files as PDF"}</span>
+                  <button className="button small secondary" disabled={ideaImportBusy !== null} onClick={chooseIdeaFile}>{ideaImportWorkspace.fileName ? "Choose another file" : "Choose a file"}</button>
+                </div>
+                {(ideaImportWorkspace.truncated || ideaImportWorkspace.warnings.length > 0) && <div className="idea-import-warning" role="status">{ideaImportWorkspace.warnings.join(" ") || "The extracted text was safely shortened."}</div>}
+                {ideaImportError && <div className="idea-import-error" role="alert">{ideaImportError}</div>}
+                <div className="idea-import-fields">
+                  <label><span>Idea title</span><input type="text" disabled={ideaImportBusy !== null} value={ideaImportWorkspace.candidate.title} onChange={(event) => updateImportedCandidate({ title: event.target.value })} /></label>
+                  <label><span>Idea document or notes</span><textarea rows={10} disabled={ideaImportBusy !== null} value={ideaImportWorkspace.sourceText} placeholder="Paste the business idea, problem, audience, or concept here…" onChange={(event) => updateImportedSourceText(event.target.value)} /></label>
+                  <label><span>One-sentence idea</span><textarea rows={3} disabled={ideaImportBusy !== null} value={ideaImportWorkspace.candidate.concept} placeholder="SIFT will use the first clear paragraph, or you can write the summary here." onChange={(event) => updateImportedCandidate({ concept: event.target.value })} /></label>
+                  {ideaImportWorkspace.aiStructured && <div className="idea-import-structured">
+                    <label><span>First user</span><textarea rows={3} disabled={ideaImportBusy !== null} value={ideaImportWorkspace.candidate.user} onChange={(event) => updateImportedCandidate({ user: event.target.value })} /></label>
+                    <label><span>Critical assumption</span><textarea rows={3} disabled={ideaImportBusy !== null} value={ideaImportWorkspace.candidate.criticalAssumption} onChange={(event) => updateImportedCandidate({ criticalAssumption: event.target.value })} /></label>
+                    <label><span>First test</span><textarea rows={3} disabled={ideaImportBusy !== null} value={ideaImportWorkspace.candidate.experiment} onChange={(event) => updateImportedCandidate({ experiment: event.target.value })} /></label>
+                  </div>}
+                </div>
+                <div className="idea-import-privacy">
+                  <strong>{ideaImportWorkspace.aiStructured ? "AI draft ready for your review." : "The original file stays on this computer."}</strong>
+                  <span>{desktopAvailable && llmReady
+                    ? isLoopbackEndpoint(llmConfig.baseUrl)
+                      ? "Your connected model is local. Extracted text stays on this computer."
+                      : ideaImportWorkspace.aiStructured
+                        ? `Extracted text—not the original file—was sent to ${LLM_PROVIDERS[llmConfig.provider].label} and the selected model provider.`
+                        : `AI structuring sends extracted text—not the file—to ${LLM_PROVIDERS[llmConfig.provider].label} and the selected model provider only after you confirm.`
+                    : "Only the editable idea fields are saved. The file and extracted document text are not stored in the project."}</span>
+                </div>
+                <div className="idea-import-actions">
+                  {desktopAvailable && llmReady && <button className="button primary" disabled={ideaImportBusy !== null || quickRunBusy || (normalizeImportedIdeaText(ideaImportWorkspace.sourceText).length < 20 && !ideaImportWorkspace.candidate.concept.trim())} onClick={() => ideaImportWorkspace.aiStructured ? saveImportedIdea(true) : void structureImportedIdeaWithAi(true)}>{ideaImportBusy === "structuring" ? "Structuring…" : ideaImportWorkspace.aiStructured ? "Check to build-ready" : "Structure & check to build-ready"}</button>}
+                  <button className="button secondary" disabled={ideaImportBusy !== null} onClick={() => saveImportedIdea(false)}>{ideaImportWorkspace.aiStructured ? "Save idea" : "Add editable draft"}</button>
+                  {desktopAvailable && llmReady && <button className="text-button" disabled={ideaImportBusy !== null} onClick={() => void structureImportedIdeaWithAi()}>{ideaImportWorkspace.aiStructured ? "Refresh AI structure" : "Structure only"}</button>}
+                  {!llmReady && desktopAvailable && <button className="text-button" onClick={() => setSection("model")}>Connect AI for automatic structuring →</button>}
+                </div>
+              </section>
+            )}
             <details className="idea-tools-panel">
               <summary>Model and prompt options</summary>
               <div className="generation-status">
@@ -3979,7 +4305,7 @@ export default function Home() {
                 {sortedIdeas.map((idea, index) => {
                   const priority = calculateGenerationPriority(state.profile, idea.scores);
                   const quality = assessIdeaQuality(idea);
-                  const isNew = latestGeneratedIdeaIds.has(idea.id);
+                  const isNew = latestGeneratedIdeaIds.has(idea.id) || latestImportedIdeaId === idea.id;
                   return (
                     <article className={`idea-card idea-card-simple${isNew ? " idea-card-new" : ""}`} key={idea.id}>
                       <div className="idea-rank"><span>#{String(index + 1).padStart(2, "0")}</span><strong>{priority}</strong><small>{index === 0 ? "Best match" : "Match score"}</small></div>
@@ -4066,7 +4392,7 @@ export default function Home() {
               <>
                 <div className="model-safety-strip">
                   <img src={SIFT_BRAND_TORNADO_URL} alt="" aria-hidden="true" />
-                  <div><strong>{pendingOneShot ? "One more step." : "One-click is the default."}</strong><span>{pendingOneShot ? "Connect below, then continue the idea workflow without starting over." : "Once connected, return Home and SIFT will generate, compare, and check ideas for you."}</span></div>
+                  <div><strong>{pendingOneShot ? "One more step." : "One-click is the default."}</strong><span>{pendingOneShot ? pendingOneShotHasIdea ? "Connect below, then continue checking your imported idea without starting over." : "Connect below, then continue the idea workflow without starting over." : "Once connected, return Home and SIFT will generate, compare, and check ideas for you."}</span></div>
                 </div>
 
                 <section className="form-card model-config-card">
@@ -4230,8 +4556,8 @@ export default function Home() {
                 </section>
 
                 <section className="model-generation-card">
-                  <div><p className="eyebrow">Next step</p><h2>{pendingOneShot ? "Continue where you left off" : "Your AI connection is ready"}</h2><p>{pendingOneShot ? "SIFT will generate several ideas, compare them, and check the strongest one." : "Go Home for the simplest one-click flow, or generate an editable list here."}</p></div>
-                  <button className="button primary" disabled={clearingLocalData || generatingIdeas || !llmReady || (pendingOneShot && !llmConnectionVerified)} onClick={() => { if (pendingOneShot) { setPendingOneShot(false); void startOneShotRun(); } else { void generateWithConnectedLlm(); } }}>{generatingIdeas ? "Generating…" : pendingOneShot ? llmConnectionVerified ? "Continue: create & check" : "Connect above to continue" : `Generate ${ideaCount} ideas`}</button>
+                  <div><p className="eyebrow">Next step</p><h2>{pendingOneShot ? "Continue where you left off" : "Your AI connection is ready"}</h2><p>{pendingOneShot ? pendingOneShotHasIdea ? "SIFT will resume this imported idea at research and screening." : "SIFT will generate several ideas, compare them, and check the strongest one." : "Go Home for the simplest one-click flow, or generate an editable list here."}</p></div>
+                  <button className="button primary" disabled={clearingLocalData || generatingIdeas || !llmReady || (pendingOneShot && !llmConnectionVerified)} onClick={() => { if (pendingOneShot) { setPendingOneShot(false); void startOneShotRun(); } else { void generateWithConnectedLlm(); } }}>{generatingIdeas ? "Generating…" : pendingOneShot ? llmConnectionVerified ? pendingOneShotHasIdea ? "Continue imported idea" : "Continue: create & check" : "Connect above to continue" : `Generate ${ideaCount} ideas`}</button>
                 </section>
               </>
             )}
@@ -5094,7 +5420,7 @@ function QuickRunGuide({ phase, message, hasEvidence, remoteModel, onContinue, o
   );
 }
 
-function Overview({ state, score, selectedIdea, desktopAvailable, oneShotReady, quickRunBusy, onOneShotRun, onQuickRun, onGuidedQuickRun, onNavigate, onUpdateProject }: {
+function Overview({ state, score, selectedIdea, desktopAvailable, oneShotReady, quickRunBusy, onOneShotRun, onBringIdea, onQuickRun, onGuidedQuickRun, onNavigate, onUpdateProject }: {
   state: AppState;
   score: ReturnType<typeof scoreReview>;
   selectedIdea?: IdeaCandidate;
@@ -5102,6 +5428,7 @@ function Overview({ state, score, selectedIdea, desktopAvailable, oneShotReady, 
   oneShotReady: boolean;
   quickRunBusy: boolean;
   onOneShotRun: () => void;
+  onBringIdea: () => void;
   onQuickRun: () => void;
   onGuidedQuickRun: () => void;
   onNavigate: (section: Section) => void;
@@ -5138,6 +5465,7 @@ function Overview({ state, score, selectedIdea, desktopAvailable, oneShotReady, 
             : desktopAvailable
             ? <button className="button primary" disabled={quickRunBusy} onClick={onOneShotRun}>{quickRunBusy ? "Running create to build…" : oneShotReady ? "Create to build" : "Connect AI to begin"}</button>
             : <a className="button primary" href="https://github.com/NickFields0101/sift/releases/latest" target="_blank" rel="noreferrer">Get SIFT Desktop</a>}
+          {!selectedIdea && <button className="button secondary" onClick={onBringIdea}>Bring my own idea</button>}
           {selectedIdea && (desktopAvailable
             ? <button className="button secondary" disabled={quickRunBusy} onClick={onOneShotRun}>Start with new ideas</button>
             : <button className="button secondary" onClick={() => onNavigate("ideas")}>Compare other ideas</button>)}
