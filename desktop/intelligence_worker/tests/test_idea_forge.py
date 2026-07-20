@@ -224,6 +224,32 @@ class IdeaForgeValidationTests(unittest.TestCase):
 
 
 class IdeaForgeWorkerTests(unittest.TestCase):
+    def test_eight_idea_run_uses_a_compact_intermediate_slate(self):
+        output = io.StringIO()
+        responses = iter((frames(8), raw_candidates(12), final_ideas(8)))
+        prompts: list[list[dict[str, str]]] = []
+        stage_timeouts: list[float] = []
+
+        def fake_client(config, messages, **kwargs):
+            prompts.append(messages)
+            stage_timeouts.append(kwargs["timeout_seconds"])
+            return json.dumps(next(responses))
+
+        worker = Worker(output, model_client=fake_client)
+        worker.handle(forge_message(requested_count=8))
+        deadline = time.time() + 2
+        while '"type":"result"' not in output.getvalue() and time.time() < deadline:
+            time.sleep(0.01)
+        messages = [json.loads(line) for line in output.getvalue().splitlines()]
+        result = next(message["result"] for message in messages if message["type"] == "result")
+
+        self.assertEqual(len(result["ideas"]), 8)
+        self.assertEqual(result["diagnostics"]["framesGenerated"], 8)
+        self.assertEqual(result["diagnostics"]["rawCandidatesGenerated"], 12)
+        self.assertIn("at most 18 words", prompts[0][0]["content"])
+        self.assertIn("under 22 words", prompts[1][0]["content"])
+        self.assertIn("under 28 words", prompts[2][0]["content"])
+
     def test_worker_runs_three_ordered_passes_and_returns_hypotheses(self):
         output = io.StringIO()
         responses = iter((frames(), raw_candidates(), final_ideas()))

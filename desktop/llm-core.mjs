@@ -637,7 +637,9 @@ export async function generateIdeas(configInput, prompt, count = 8, {
   const raw = await request(config, path, { method: "POST", headers: headersFor(config, true), body: JSON.stringify(body) }, fetchImpl, timeoutMs);
   const payload = parseJson(raw);
   const ideas = [];
-  for (const candidate of extractIdeaArray(extractModelContent(config, payload)).slice(0, requestedCount)) {
+  const candidateLimit = Math.min(24, requestedCount * 2);
+  for (const candidate of extractIdeaArray(extractModelContent(config, payload)).slice(0, candidateLimit)) {
+    if (ideas.length >= requestedCount) break;
     try {
       const idea = normalizeGeneratedIdea(candidate);
       if (profileMode === "private" && idea.scores.personalFit === null) continue;

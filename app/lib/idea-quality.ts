@@ -277,6 +277,10 @@ function signatureTokens(candidate: IdeaQualityCandidate) {
     .filter((token) => token.length > 2 && !STOPWORDS.has(token)));
 }
 
+function canonicalTitle(candidate: IdeaQualityCandidate) {
+  return candidate.title.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+}
+
 export function ideaSimilarity(left: IdeaQualityCandidate, right: IdeaQualityCandidate) {
   const a = signatureTokens(left);
   const b = signatureTokens(right);
@@ -290,6 +294,7 @@ export function selectQualitySlate<T extends IdeaQualityCandidate>(
   candidates: readonly T[],
   requestedCount: number,
   explorationPriority: (candidate: T) => number,
+  existingCandidates: readonly IdeaQualityCandidate[] = [],
 ) {
   const assessed = candidates.map((candidate, index) => ({ candidate, index, report: assessIdeaQuality(candidate) }));
   const ordered = assessed
@@ -304,7 +309,14 @@ export function selectQualitySlate<T extends IdeaQualityCandidate>(
     });
   const selected: typeof ordered = [];
   for (const item of ordered) {
-    if (selected.some((existing) => ideaSimilarity(existing.candidate, item.candidate) >= 0.72)) continue;
+    if (existingCandidates.some((existing) => (
+      canonicalTitle(existing) === canonicalTitle(item.candidate)
+      || ideaSimilarity(existing, item.candidate) >= 0.72
+    ))) continue;
+    if (selected.some((existing) => (
+      canonicalTitle(existing.candidate) === canonicalTitle(item.candidate)
+      || ideaSimilarity(existing.candidate, item.candidate) >= 0.72
+    ))) continue;
     selected.push(item);
     if (selected.length >= Math.max(1, requestedCount)) break;
   }

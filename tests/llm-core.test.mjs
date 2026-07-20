@@ -1070,6 +1070,26 @@ test("rejects malformed and incomplete output but keeps valid partial slates", a
     { fetchImpl: async () => jsonResponse({ message: { content: JSON.stringify({ ideas: [completeIdea()] }) } }) },
   );
   assert.equal(partial.ideas.length, 1);
+
+  const salvaged = await generateIdeas(
+    config,
+    "prompt",
+    2,
+    {
+      fetchImpl: async () => jsonResponse({
+        message: {
+          content: JSON.stringify({
+            ideas: [
+              { title: "Incomplete" },
+              completeIdea(),
+              completeIdea({ title: "Second complete idea" }),
+            ],
+          }),
+        },
+      }),
+    },
+  );
+  assert.equal(salvaged.ideas.length, 2);
 });
 
 test("sanitizes HTTP and network failures", async () => {

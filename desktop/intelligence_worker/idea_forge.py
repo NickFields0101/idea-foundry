@@ -441,7 +441,7 @@ def run_idea_forge(
     # slate. The critic still returns the requested number of complete ideas,
     # while deep models spend less time restating throwaway hypotheses.
     frame_count = min(10, max(6, requested_count))
-    raw_count = min(24, max(requested_count * 2, requested_count + 4))
+    raw_count = min(18, max(requested_count + 4, min(8, requested_count * 2)))
     input_json = json.dumps(request.input, ensure_ascii=False, separators=(",", ":"))
 
     frame_system = f"""You are the opportunity-framing pass in SIFT's idea forge.
@@ -452,7 +452,8 @@ Return JSON only with exact schema:
 {{"frames":[{{"label":"string","user":"string","triggeringSituation":"string",
 "problemMechanism":"string","materialConsequence":"string","currentAlternative":"string",
 "protocolPossibility":"string"}}]}}
-Return exactly {frame_count} distinct problem-mechanism frames. Do not generate product ideas yet."""
+    Return exactly {frame_count} distinct problem-mechanism frames. Do not generate product ideas yet.
+    Keep every string to one short phrase of at most 18 words so later passes receive a compact brief."""
     frame_text = call_stage(
         "framing",
         20,
@@ -475,7 +476,8 @@ Return JSON only with exact schema:
 "currentAlternative":"string","materialConsequence":"string","protocolHypothesis":"string",
 "conventionalAlternative":"string"}}]}}
 Return exactly {raw_count} genuinely distinct raw candidates spanning the supplied frames. Explore
-conventional, Xahau, Evernode, Both, and Neither-yet possibilities. Do not rank or claim demand."""
+    conventional, Xahau, Evernode, Both, and Neither-yet possibilities. Do not rank or claim demand.
+    Keep every string concise and under 22 words; compactness is required for this intermediate pass."""
     raw_text = call_stage(
         "diverging",
         48,
@@ -506,7 +508,8 @@ conventional, Xahau, Evernode, Both, and Neither-yet possibilities. Do not rank 
 Critique the raw set, discard forced protocol use and duplicates, and revise the strongest options.
 Scores are provisional exploration estimates from 0 to 100, not evidence. `whyNow` must explicitly
 say hypothesis/unknown/if/may/could/might. A Both route must format protocolNeed as
-`Xahau role: ... Evernode role: ...`. Every protocolCounterfactual must name a conventional option.
+    `Xahau role: ... Evernode role: ...`. Every protocolCounterfactual must name a conventional option.
+    Keep titles under 8 words and all other prose fields under 28 words, except a Both protocolNeed may use 40.
 Return exactly {requested_count} ideas as JSON only, with no extra keys, using this exact schema:
 {{"ideas":[{{
 "title":"string","concept":"string","user":"string","buyer":"string",

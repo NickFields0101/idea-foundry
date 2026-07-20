@@ -115,6 +115,38 @@ test("slate selection removes near duplicates before applying the requested coun
   assert.equal(slate.partial, true);
 });
 
+test("slate selection excludes ideas already saved in earlier runs", () => {
+  const saved = strongIdea();
+  const repeated = strongIdea({ title: "Portable independent repair records" });
+  const different = strongIdea({
+    title: "Equipment deposit guard",
+    user: "Small construction equipment rental operators",
+    buyer: "Independent equipment rental owners",
+    triggeringSituation: "A renter returns equipment after hours and the owner must decide whether damage existed before the rental.",
+    currentAlternative: "The owner compares phone photos and a paper checkout form before manually returning the deposit.",
+    concept: "An account-level deposit rule releases or holds a rental deposit against a jointly signed condition record.",
+    criticalAssumption: "Renters will complete a condition record to receive the deposit immediately.",
+  });
+  const slate = selectQualitySlate([repeated, different], 2, () => 80, [saved]);
+  assert.deepEqual(slate.selected.map(({ candidate }) => candidate.title), ["Equipment deposit guard"]);
+  assert.equal(slate.partial, true);
+});
+
+test("distinct non-Latin titles do not collapse into the same duplicate key", () => {
+  const saved = strongIdea({ title: "独立维修凭证" });
+  const candidate = strongIdea({
+    title: "حارس وديعة المعدات",
+    user: "Small construction equipment rental operators",
+    buyer: "Independent equipment rental owners",
+    triggeringSituation: "A renter returns equipment after hours and the owner must decide whether damage existed before the rental.",
+    currentAlternative: "The owner compares phone photos and a paper checkout form before manually returning the deposit.",
+    concept: "An account-level deposit rule releases or holds a rental deposit against a jointly signed condition record.",
+    criticalAssumption: "Renters will complete a condition record to receive the deposit immediately.",
+  });
+  const slate = selectQualitySlate([candidate], 1, () => 80, [saved]);
+  assert.equal(slate.selected.length, 1);
+});
+
 test("quality is stable under whitespace, punctuation, and repeated evaluation", () => {
   const idea = strongIdea();
   const spaced = strongIdea({
